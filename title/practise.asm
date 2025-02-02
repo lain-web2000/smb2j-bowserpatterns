@@ -40,6 +40,9 @@ TStartGame:
     lda StatusPowers,x
     sta PlayerStatus
 
+    lda SettablesHero                            ; set current player
+    sta SelectedPlayer                           ;
+	
     lda #$2
     sta NumberofLives
 

@@ -1,35 +1,41 @@
-SettablesCount = $2
+SettablesCount = $3
 
 .pushseg
 .segment "MENUWRAM"
 Settables:
 SettablePUP: .byte $00
+SettablesHero:  .byte $00
 Settable2:   .byte $00
 .popseg
 
 MenuTitles:
 .byte "P-UP"
+.byte "HERO"
 .byte "RNG "
 
 .define MenuTitleLocations \
     $20CA + ($40 * 0), \
-    $20CA + ($40 * 1)
+    $20CA + ($40 * 1), \
+    $20CA + ($40 * 2)
 
 .define MenuValueLocations \
     $20D3 + ($40 * 0) - 3, \
-    $20D3 + ($40 * 1) - 4
+    $20D3 + ($40 * 1) - 4, \
+    $20D3 + ($40 * 2) - 4
 
 UpdateMenuValueJE:
     tya
     jsr JumpEngine
     .word UpdateValuePUps        ; p-up
+	.word UpdateValueToggle		 ; hero
     .word UpdateValueFramerule   ; frame
 
 DrawMenuValueJE:
     tya
     jsr JumpEngine
     .word DrawValueString_PUp    ; p-up
-    .word DrawValueFramerule ; frame
+    .word DrawValueString_Hero   ; hero
+    .word DrawValueFramerule 	 ; frame
 
 DrawMenuTitle:
     clc
@@ -64,6 +70,9 @@ MenuReset:
     jsr DrawMenu
     rts
 
+; ===========================================================================
+;  Redraw menu
+; ---------------------------------------------------------------------------
 DrawMenu:
     ldy #(SettablesCount-1)
     sty $10
@@ -76,7 +85,12 @@ DrawMenu:
     sty $10
     bpl @KeepDrawing
     rts
+	
+; ===========================================================================
 
+; ===========================================================================
+;  Menu main loop
+; ---------------------------------------------------------------------------
 MenuNMI:
     jsr DrawSelectionMarkers
     lda PressedButtons
@@ -120,7 +134,12 @@ RenderMenu:
     ldy MenuSelectedItem
     jsr DrawMenu
     rts
+; ===========================================================================
 
+
+; ===========================================================================
+;  Position the "cursors" of the menu at the correct location
+; ---------------------------------------------------------------------------
 DrawSelectionMarkers:
     lda #$00                                 ; set palette attributes for sprites
     sta Sprite_Attributes + (1 * SpriteLen)  ;
@@ -148,6 +167,7 @@ DrawSelectionMarkers:
     bpl :-                                   ; and loop until done
     sta Sprite_X_Position + (2 * SpriteLen)  ; reposition sprite 2 (background color)
     rts                                      ; done
+; ===========================================================================
 
 UpdateValueITC:
     ldx #$FF
@@ -159,34 +179,50 @@ UpdateValueITC:
     stx $0
     jmp UpdateValueShared
 
+; update selected powerup value
 UpdateValuePUps:
-    lda #3
-    sta $0
-    jmp UpdateValueShared
+    ldx #3                 ; there are 3 total states
+    jmp UpdateValueShared  ; update selected menu item
 
+; update toggleable option
+UpdateValueToggle:
+    ldx #2                 ; toggle between two options
+    jmp UpdateValueShared  ; update selected menu item
+	
+; ===========================================================================
+; Update a single byte menu item
+; ---------------------------------------------------------------------------
+; Input:  Y   = menu item index
+;         X   = maximum allowed value
+; ---------------------------------------------------------------------------
 UpdateValueShared:
-    clc
-    lda PressedButtons
-    and #%000110
-    bne @Decrement
-@Increment:
-    lda Settables, y
-    adc #1
-    cmp $0
-    bcc @Store
-    lda #0
-    bvc @Store
-@Decrement:
-    lda Settables, y
-    beq @Wrap
-    sbc #0
-    bvc @Store
-@Wrap:
-    lda $0
-    sbc #0
-@Store:
-    sta Settables, y
-    rts
+    @Max = $0
+    stx @Max                          ; temp store max value
+    clc                               ;
+    lda PressedButtons                ; get current inputs
+    and #Down_Dir|Left_Dir            ; check if we're pressing decrementing direction
+    bne @Decrement                    ; yes - skip ahead to decrement
+@Increment:                           ; no - we are incrementing
+    lda Settables,y                   ; get current value of the menu item
+    adc #1                            ; increment it
+    cmp @Max                          ; check if we're beyond the maximum value
+    bcc @Store                        ; no - skip ahead to store
+    lda #0                            ; yes - set to 0
+    beq @Store                        ; and store
+@Decrement:                           ;
+    lda Settables,y                   ; get current value of the menu item
+    beq @Wrap                         ; if it's 0, wrap around
+    sec                               ;
+    sbc #1                            ; otherwise, decrement it
+    bvc @Store                        ; skip ahead to store
+@Wrap:                                ;
+    lda @Max                          ; wrap around to the maximum value + 1
+    sec                               ; and decrement it by 1
+    sbc #1                            ;
+@Store:                               ;
+    sta Settables,y                   ; store the new value
+    rts                               ;
+; ===========================================================================
 
 DrawValueNormal:
     clc
@@ -218,6 +254,29 @@ DrawValueString_PUp:
     lda #5
     sta MenuTextLen
     jmp DrawValueString
+
+; ===========================================================================
+; Draws player name to the screen
+; ---------------------------------------------------------------------------
+DrawValueString_Hero:
+    lda Settables,y                   ; get the selected player
+    asl a                             ; get offset into pointer table
+    tax                               ;
+    lda @Strings,x                    ; copy string pointer to menu text pointer
+    sta MenuTextPtr                   ;
+    lda @Strings+1,x                  ;
+    sta MenuTextPtr+1                 ;
+    lda #5                            ; set fixed string length
+    sta MenuTextLen                   ;
+    jmp DrawValueString               ; and draw the string
+
+@Strings:
+.word @Str0
+.word @Str1
+
+@Str0: .byte "MARIO"
+@Str1: .byte "LUIGI"
+; ===========================================================================	
 
 MenuTextPtr = $C3
 MenuTextLen = $C2
