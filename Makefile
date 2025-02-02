@@ -24,6 +24,6 @@ smb2j-bowser.nes: layout-greated title/boot-greated.o sm2main.o
 	$(LD)  --dbgfile "$@.dbg" -C $^ -o $@
 
 clean:
-	rm -f ./main*.nes ./*.nes.dbg ./*.o.lst ./*.o ./*.dep ./*/*.o ./*/*.dep
+	rm -f ./smb2j-bowser.nes ./main*.nes ./*.nes.dbg ./*.o.lst ./*.o ./*.dep ./*/*.o ./*/*.dep
 
 include $(wildcard ./*.dep ./*/*.dep)

@@ -1,33 +1,39 @@
-SettablesCount = $3
+.export SettablesLevel
+SettablesCount = $4
 
 .pushseg
 .segment "MENUWRAM"
 Settables:
 SettablePUP: .byte $00
 SettablesHero:  .byte $00
+SettablesLevel: .byte $00
 Settable2:   .byte $00
 .popseg
 
 MenuTitles:
 .byte "P-UP"
 .byte "HERO"
+.byte "WRLD"
 .byte "RNG "
 
 .define MenuTitleLocations \
     $20CA + ($40 * 0), \
     $20CA + ($40 * 1), \
-    $20CA + ($40 * 2)
+    $20CA + ($40 * 2), \
+    $20CA + ($40 * 3)
 
 .define MenuValueLocations \
     $20D3 + ($40 * 0) - 3, \
     $20D3 + ($40 * 1) - 4, \
-    $20D3 + ($40 * 2) - 4
+    $20D3 + ($40 * 2) - 2, \
+    $20D3 + ($40 * 3) - 4
 
 UpdateMenuValueJE:
     tya
     jsr JumpEngine
     .word UpdateValuePUps        ; p-up
 	.word UpdateValueToggle		 ; hero
+	.word UpdateValueToggle		 ; level
     .word UpdateValueFramerule   ; frame
 
 DrawMenuValueJE:
@@ -35,6 +41,7 @@ DrawMenuValueJE:
     jsr JumpEngine
     .word DrawValueString_PUp    ; p-up
     .word DrawValueString_Hero   ; hero
+    .word DrawValueString_Level   ; level
     .word DrawValueFramerule 	 ; frame
 
 DrawMenuTitle:
@@ -276,6 +283,29 @@ DrawValueString_Hero:
 
 @Str0: .byte "MARIO"
 @Str1: .byte "LUIGI"
+; ===========================================================================	
+
+; ===========================================================================
+; Draws player name to the screen
+; ---------------------------------------------------------------------------
+DrawValueString_Level:
+    lda Settables,y                   ; get the selected player
+    asl a                             ; get offset into pointer table
+    tax                               ;
+    lda @Strings,x                    ; copy string pointer to menu text pointer
+    sta MenuTextPtr                   ;
+    lda @Strings+1,x                  ;
+    sta MenuTextPtr+1                 ;
+    lda #3                            ; set fixed string length
+    sta MenuTextLen                   ;
+    jmp DrawValueString               ; and draw the string
+
+@Strings:
+.word @Str0
+.word @Str1
+
+@Str0: .byte "8-4"
+@Str1: .byte "D-4"
 ; ===========================================================================	
 
 MenuTextPtr = $C3

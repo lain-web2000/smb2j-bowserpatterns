@@ -1,19 +1,33 @@
+.import SettablesLevel
 ;-------------------------------------------------------------------------------------
 
 LoadAreaPointer:
-      lda #$11
-      sta EntrancePage
       lda #$02
       sta AltEntranceControl
-      lda #$7
-      sta WorldNumber
       lda #$3
       sta LevelNumber
+	  lda SettablesLevel
+	  bne @WorldD4
+@World84:
+      lda #$11
+      sta EntrancePage
+      lda #$7
+      sta WorldNumber
       lda #$67
       sta AreaPointer
+	  bne @End
+@WorldD4:
+	  inc HardWorldFlag
+      lda #$08
+      sta EntrancePage
+	  lda #$3
+      sta WorldNumber
+      lda #$63
+      sta AreaPointer
+@End:
       rts
 	  
-GetAreaType: and #%01100000       ;mask out all but d6 and d5
+GetAreaType: and #%01100000       ;mask out all but d6 and d5	
              asl
              rol
              rol
