@@ -1,12 +1,15 @@
 AS = ca65
 CC = cc65
 LD = ld65
+ifdef ANN
+AFLAGS += -DANN
+endif
 
 .PHONY: clean
 build: patchsite/diff-mmc1.json patchsite/diff-greated.json
 
 %.o: %.asm
-	$(AS) --create-dep "$@.dep" --listing "$@.lst" -g --debug-info $< -o $@
+	$(AS) $(AFLAGS) --create-dep "$@.dep" --listing "$@.lst" -g --debug-info $< -o $@
 
 patchsite/diff-mmc1.json: main-mmc1.nes
 	node ./scripts/create-patchinfo.js main-mmc1.nes > "$@"

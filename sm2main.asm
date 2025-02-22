@@ -92,7 +92,14 @@ VRAM_AddrTable:
    .word MarioThankYouMsgFinal, PeaceIsPavedMsg, WithKingdomSavedMsg, MarioHurrahMsg
    .word OurOnlyHeroMsg, ThisEndsYourTripMsg, OfALongFriendshipMsg, PointsAddedMsg
    .word ForEachPlayerLeftMsg, LuigiThankYouMsgFinal, LuigiHurrahMsg, DiskScreenPalette
-   .word PrincessPeachsRoom, FantasyWorld9Msg, SuperPlayerMsg
+   .word PrincessPeachsRoom
+.ifdef ANN
+   .word VRAM_Buffer1       ; unused ; 29
+   .word ANNEndingPalette            ; 30
+.else
+   .word FantasyWorld9Msg            ; 29
+   .word SuperPlayerMsg              ; 30
+.endif
 
 VRAM_Buffer_Offset:
    .byte <VRAM_Buffer1_Offset, <VRAM_Buffer2_Offset
@@ -104,7 +111,6 @@ NMIHandler:
    and #%01111110            ;(essentially $2000) and disable another NMI
    sta Mirror_PPU_CTRL       ;from interrupting this one
    sta PPU_CTRL
-   sei
    lda Mirror_PPU_MASK
    and #%11100110            ;disable OAM and background display by default
    ldy DisableScreenFlag     ;if screen disabled, skip this
@@ -230,7 +236,11 @@ PauseRoutine:
                cmp #GameMode          ;are we in game mode?
                bne ExitPause          ;if not, leave
                lda OperMode_Task      ;if we are in game mode, are we running game engine?
+.ifdef ANN
+               cmp #$05
+.else
                cmp #$04
+.endif
                bne ExitPause          ;if not, leave
 ChkPauseTimer: lda GamePauseTimer     ;check if pause timer is still counting down
                beq ChkStart
@@ -318,7 +328,7 @@ MoveAllSpritesOffscreen:
               .byte $2c                 ;BIT instruction opcode
 
 MoveSpritesOffscreen:
-              ldy #$04                ;this routine moves all but sprite 0
+              ldy #$04                ;this routine moves all but IRQ
               lda #$f8                ;off the screen
 SprInitLoop:  sta Sprite_Y_Position,y ;write 248 into OAM data's Y coordinate
               iny                     ;which will move it off the screen
@@ -382,17 +392,59 @@ VictoryModeSubsForW8:
 
 ;-------------------------------------------------------------------------------------
 
+.ifndef ANN
 WorldBits:
     .byte $01, $02, $04, $08, $10, $20, $40, $80
 
 SetupVictoryMode:
+.else
+MushroomPal1: .byte $36, $36, $12, $36, $36, $12, $36
+MushroomPal2: .byte $30, $30, $30, $30, $30, $30, $20
+MushroomPal3: .byte $16, $1a, $36, $16, $1a, $36, $38
+
+SetupVictoryMode:
+      @TempPtr = $00
+      lda HardWorldFlag                 ; check if we're playing hard worlds
+      bne @VictoryMode                  ; if so - skip to 2j code
+      ldy WorldNumber                   ; get current world
+      cpy #World8                       ; are we in world 8?
+      beq @VictoryMode                  ; yes - skip to 2j code
+      ldx VRAM_Buffer1_Offset
+      lda #$3F
+      sta VRAM_Buffer1,x
+      inx
+      lda #$18
+      sta VRAM_Buffer1,x
+      inx
+      lda #$04
+      sta VRAM_Buffer1,x
+      inx
+      lda #$0F
+      sta VRAM_Buffer1,x
+      inx
+      lda MushroomPal1,y
+      sta VRAM_Buffer1,x
+      inx
+      lda MushroomPal2,y
+      sta VRAM_Buffer1,x
+      inx
+      lda MushroomPal3,y
+      sta VRAM_Buffer1,x
+      inx
+      lda #$00
+      sta VRAM_Buffer1,x
+      stx VRAM_Buffer1_Offset
+@VictoryMode:
+.endif
          ldx ScreenRight_PageLoc ;get page location of right side of screen
          inx                     ;increment to next page
          stx DestinationPageLoc
+.ifndef ANN
          ldy WorldNumber
          lda WorldBits,y
          ora CompletedWorlds     ;set bit according to the world the player was in
          sta CompletedWorlds
+.endif
          lda HardWorldFlag       ;if not playing worlds A-D, branch to skip this
          beq W1Thru8
          lda WorldNumber         ;otherwise, if not on world D, branch to skip this
@@ -403,6 +455,7 @@ SetupVictoryMode:
 W1Thru8: lda #EndOfCastleMusic
          sta EventMusicQueue     ;play win castle music
 
+LoadWorldMushroomRetainer:
 IncModeTask:
     inc OperMode_Task
     rts
@@ -489,11 +542,19 @@ EndCastleAward:
    lda WorldEndTimer      ;if world end timer has not yet reached a certain point
    cmp #$06               ;then go ahead and skip all of this
    bcs ExEWA
+.ifndef ANN
    jsr AwardTimerCastle
+.endif
    lda GameTimerDisplay   ;if game timer points not all awarded, skip this part
    ora GameTimerDisplay+1
    ora GameTimerDisplay+2
+.ifdef ANN
+   beq @Continue          ; bugfix for castle countdown, skip ahead if timer is zero
+   jmp AwardTimerCastle   ; otherwise run timer countdown
+   @Continue:
+.else
    bne ExEWA
+.endif
    lda #$30
    sta SelectTimer        ;set select timer (used for world 8 ending only)
    lda #$06
@@ -503,6 +564,7 @@ ExEWA:
    rts
 
 .export EndWorld1Thru7
+
 EndWorld1Thru7:
            lda WorldEndTimer         ;skip this until world end timer expires
            bne EndExit
@@ -510,6 +572,9 @@ NextWorld: lda #$00
            sta AreaNumber            ;reset area/level numbers to start the next world
            sta LevelNumber
            sta OperMode_Task
+.ifdef ANN
+           inc WorldNumber           ; advance to next world
+.else
            lda WorldNumber
            clc
            adc #$01                  ;add one, but only up to world 9
@@ -517,6 +582,7 @@ NextWorld: lda #$00
            bcc NoPast9
            lda #World9               ;make world 9 loop forever (or until game is over)
 NoPast9:   sta WorldNumber           ;update the world number
+.endif
            jsr RunLoadAreaPointer    ;get pointer for the next area
            inc FetchNewGameTimerFlag ;and get a new game timer
            lda #$01
@@ -622,8 +688,11 @@ SetupNumSpr:  lda FloateyNum_Y_Pos,x       ;get vertical coordinate
               lda FloateyNumTileData+1,x
               sta Sprite_Tilenumber+4,y    ;display the second half
               ldx ObjectOffset             ;get enemy object offset and leave
+.ifdef ANN
+ANNDoNothing:
+.endif
               rts
-
+			  
 ;-------------------------------------------------------------------------------------
 
 ScreenRoutines:
@@ -639,7 +708,11 @@ ScreenRoutines:
    .word DisplayTimeUp
    .word ResetSpritesAndScreenTimer
    .word DisplayIntermediate
+.ifdef ANN
+   .word ANNDoNothing
+.else
    .word PrintWorld9Msgs
+.endif
    .word ResetSpritesAndScreenTimer
    .word AreaParserTaskControl
    .word GetAreaPalette
@@ -830,17 +903,23 @@ DisplayIntermediate:
 PlayerInter:   jsr DrawPlayer_Intermediate  ;put player in appropriate place for
                lda #$01                     ;lives display, then output lives display to buffer
 OutputInter:   jsr OtherInter
+.ifdef ANN
+               jmp IncSubtask
+.else
                lda WorldNumber              ;if on any world besides 9, do next task
                cmp #World9
                bne IncSubtask
                inc DisableScreenFlag        ;disable screen output
                rts
+.endif
 
 GameOverInter: lda #$03                     ;output game over screen to buffer
                jsr WriteGameText
+.ifndef ANN
                lda WorldNumber
                cmp #World9
                beq IncSubtask
+.endif
                jmp IncModeTask
 
 NoInter:       lda #$09                     ;skip ahead in screen routine list
@@ -891,6 +970,26 @@ GameOver:
   .byte $ff
 
 WarpZone:
+.ifdef ANN ; Use SMB1 style Warpzones
+  .byte $25, $84, $15
+  .byte $20, $0e, $15, $0c, $18, $16, $0e, $24, $1d, $18 ; "WELCOME TO WARP ZONE!"
+  .byte $24, $20, $0a, $1b, $19, $24, $23, $18, $17, $0e
+  .byte $2b
+  .byte $26, $25, $01, $24         ; placeholder for left pipe
+  .byte $26, $2d, $01, $24         ; placeholder for middle pipe
+  .byte $26, $35, $01, $24         ; placeholder for right pipe
+  .byte $27, $d9, $46, $aa         ; attribute data
+  .byte $27, $e1, $45, $aa
+  .byte $00
+
+WarpZoneNumbers:
+  .byte $04, $03, $02, $00         ; warp zone numbers, note spaces on middle
+  .byte $24, $05, $24, $00         ; zone, partly responsible for
+  .byte $08, $07, $06, $00         ; the minus world
+  .byte $24, $0B, $24, $00         ; 2j-style ANN warpzones
+  .byte $24, $0C, $24, $00         ; 2j-style ANN warpzones
+  .byte $24, $0D, $24, $00         ; 2j-style ANN warpzones
+.else
   .byte $25, $84, $15
   .byte $20, $0e, $15, $0c, $18, $16, $0e, $24, $1d, $18 ; "WELCOME TO WARP ZONE!"
   .byte $24, $20, $0a, $1b, $19, $24, $23, $18, $17, $0e
@@ -900,11 +999,12 @@ WarpZone:
   .byte $27, $e1, $45, $aa
   .byte $00
 
-LuigiName:
-  .byte $15, $1e, $12, $10, $12 ; "LUIGI", no address or length
-
 WarpZoneNumbers:
   .byte $02, $03, $04, $01, $06, $07, $08, $05, $0b, $0c, $0d
+  
+.endif
+LuigiName:
+  .byte $15, $1e, $12, $10, $12 ; "LUIGI", no address or length
 
 GameTextOffsets:
    .byte TopStatusBarLine-GameText
@@ -967,10 +1067,27 @@ WZMLoop: iny
          pla
          sec
          sbc #$80              ;clear d7 of warp zone control, use as offset
+.ifdef ANN
+         asl                    ;twice to get proper warp zone number
+         asl                    ;offset
+         tax
+         ldy #$00
+:        lda WarpZoneNumbers,x  ;print warp zone numbers into the
+         sta VRAM_Buffer1+27,y  ;placeholders from earlier
+         inx
+         iny                    ;put a number in every fourth space
+         iny
+         iny
+         iny
+         cpy #$0c
+         bcc :-
+         lda #$2c               ;load new buffer pointer at end of message
+.else
          tax
          lda WarpZoneNumbers,x ;replace blank tile with world number
          sta VRAM_Buffer1+27   ;that the warp zone leads to
          lda #$24              ;set VRAM offset after the contents
+.endif
          jmp SetVRAMOffset     ;in case anything else needs to go in there
 
 ResetSpritesAndScreenTimer:
@@ -1230,14 +1347,26 @@ WriteBlockMetatile:
              cmp #$00                ;check contents of A for blank metatile
              beq UseBOffset          ;branch if found (unconditional if destroying metatile)
              ldy #$00                ;load offset for brick metatile w/ line
-             cmp #$56 
+.ifdef ANN
+             cmp #$57
+.else
+             cmp #$56
+.endif
              beq UseBOffset          ;use offset if metatile is brick with coins (w/ line)
+.ifdef ANN
+             cmp #$51
+.else
              cmp #$4f
+.endif
              beq UseBOffset          ;use offset if metatile is breakable brick w/ line
              iny                     ;increment offset for brick metatile w/o line
              cmp #$5c
              beq UseBOffset          ;use offset if metatile is brick with coins (w/o line)
+.ifdef ANN
+             cmp #$52
+.else
              cmp #$50
+.endif
              beq UseBOffset          ;use offset if metatile is breakable brick w/o line
              iny                     ;if any other metatile, increment offset for empty block
 UseBOffset:  tya                     ;put Y in A
@@ -1314,6 +1443,119 @@ MetatileGraphics_Low:
 
 MetatileGraphics_High:
   .byte >Palette0_MTiles, >Palette1_MTiles, >Palette2_MTiles, >Palette3_MTiles
+
+.ifdef ANN
+; ann metatiles are mostly copied from smb1, not completely
+Palette0_MTiles:
+  .byte $24, $24, $24, $24 ;blank
+  .byte $27, $27, $27, $27 ;black metatile
+  .byte $24, $24, $24, $35 ;bush left
+  .byte $36, $25, $37, $25 ;bush middle
+  .byte $24, $38, $24, $24 ;bush right
+  .byte $24, $30, $30, $26 ;mountain left
+  .byte $26, $26, $34, $26 ;mountain left bottom/middle center
+  .byte $24, $31, $24, $32 ;mountain middle top
+  .byte $33, $26, $24, $33 ;mountain right
+  .byte $34, $26, $26, $26 ;mountain right bottom
+  .byte $26, $26, $26, $26 ;mountain middle bottom
+  .byte $24, $c0, $24, $c0 ;bridge guardrail
+  .byte $24, $7f, $7f, $24 ;chain
+  .byte $b8, $ba, $b9, $bb ;tall tree top, top half
+  .byte $b8, $bc, $b9, $bd ;short tree top
+  .byte $ba, $bc, $bb, $bd ;tall tree top, bottom half
+  .byte $60, $64, $61, $65 ;warp pipe end left, points up
+  .byte $62, $66, $63, $67 ;warp pipe end right, points up
+  .byte $60, $64, $61, $65 ;decoration pipe end left, points up
+  .byte $62, $66, $63, $67 ;decoration pipe end right, points up
+  .byte $68, $68, $69, $69 ;pipe shaft left
+  .byte $26, $26, $6a, $6a ;pipe shaft right
+  .byte $4b, $4c, $4d, $4e ;tree ledge left edge
+  .byte $4d, $4f, $4d, $4f ;tree ledge middle
+  .byte $4d, $4e, $50, $51 ;tree ledge right edge
+  .byte $6b, $70, $2c, $2d ;mushroom left edge
+  .byte $6c, $71, $6d, $72 ;mushroom middle
+  .byte $6e, $73, $6f, $74 ;mushroom right edge
+  .byte $86, $8a, $87, $8b ;sideways pipe end top
+  .byte $88, $8c, $88, $8c ;sideways pipe shaft top
+  .byte $89, $8d, $69, $69 ;sideways pipe joint top
+  .byte $8e, $91, $8f, $92 ;sideways pipe end bottom
+  .byte $26, $93, $26, $93 ;sideways pipe shaft bottom
+  .byte $90, $94, $69, $69 ;sideways pipe joint bottom
+  .byte $a4, $e9, $ea, $eb ;seaplant
+  .byte $24, $24, $24, $24 ;blank, used on bricks or blocks that are hit
+  .byte $24, $2f, $24, $3d ;flagpole ball
+  .byte $a2, $a2, $a3, $a3 ;flagpole shaft
+  .byte $24, $24, $24, $24 ;blank, used in conjunction with vines
+
+Palette1_MTiles:
+  .byte $a2, $a2, $a3, $a3 ;vertical rope
+  .byte $99, $24, $99, $24 ;horizontal rope
+  .byte $24, $a2, $3e, $3f ;left pulley
+  .byte $5b, $5c, $24, $a3 ;right pulley
+  .byte $24, $24, $24, $24 ;blank used for balance rope
+  .byte $9d, $47, $9e, $47 ;castle top
+  .byte $47, $47, $27, $27 ;castle window left
+  .byte $47, $47, $47, $47 ;castle brick wall
+  .byte $27, $27, $47, $47 ;castle window right
+  .byte $a9, $47, $aa, $47 ;castle top w/ brick
+  .byte $9b, $27, $9c, $27 ;entrance top
+  .byte $27, $27, $27, $27 ;entrance bottom
+  .byte $52, $52, $52, $52 ;green ledge stump
+  .byte $80, $a0, $81, $a1 ;fence
+  .byte $be, $be, $bf, $bf ;tree trunk
+  .byte $75, $ba, $76, $bb ;mushroom stump top
+  .byte $ba, $ba, $bb, $bb ;mushroom stump bottom
+  .byte $45, $47, $45, $47 ;breakable brick w/ line 
+  .byte $47, $47, $47, $47 ;breakable brick 
+  .byte $45, $47, $45, $47 ;breakable brick (not used)
+  .byte $45, $47, $45, $47 ;brick with line (power-up)
+  .byte $45, $47, $45, $47 ;brick with line (vine)
+  .byte $45, $47, $45, $47 ;brick with line (star)
+  .byte $45, $47, $45, $47 ;brick with line (coins)
+  .byte $45, $47, $45, $47 ;brick with line (1-up)
+  .byte $47, $47, $47, $47 ;brick (power-up)
+  .byte $47, $47, $47, $47 ;brick (vine)
+  .byte $47, $47, $47, $47 ;brick (star)
+  .byte $47, $47, $47, $47 ;brick (coins)
+  .byte $47, $47, $47, $47 ;brick (1-up)
+  .byte $24, $24, $24, $24 ;hidden block (1 coin)
+  .byte $24, $24, $24, $24 ;hidden block (1-up)
+  .byte $24, $24, $24, $24 ;hidden block (power-up)
+  .byte $ab, $ac, $ad, $ae ;solid block (3-d block)
+  .byte $5d, $5e, $5d, $5e ;solid block (white wall)
+  .byte $c1, $24, $c1, $24 ;bridge
+  .byte $c6, $c8, $c7, $c9 ;bullet bill cannon barrel
+  .byte $ca, $cc, $cb, $cd ;bullet bill cannon top
+  .byte $2a, $2a, $40, $40 ;bullet bill cannon bottom
+  .byte $24, $24, $24, $24 ;blank used for jumpspring
+  .byte $24, $47, $24, $47 ;half brick used for jumpspring
+  .byte $82, $83, $84, $85 ;solid block (water level, green rock)
+  .byte $b4, $b6, $b5, $b7 ;cracked rock terrain
+  .byte $24, $47, $24, $47 ;half brick (not used)
+  .byte $86, $8a, $87, $8b ;water pipe top
+  .byte $8e, $91, $8f, $92 ;water pipe bottom
+  .byte $24, $2f, $24, $3d ;flag ball (residual object)
+
+Palette2_MTiles:
+  .byte $24, $24, $24, $35 ;cloud left
+  .byte $36, $25, $37, $25 ;cloud middle
+  .byte $24, $38, $24, $24 ;cloud right
+  .byte $24, $24, $39, $24 ;cloud bottom left
+  .byte $3a, $24, $3b, $24 ;cloud bottom middle
+  .byte $3c, $24, $24, $24 ;cloud bottom right
+  .byte $41, $26, $41, $26 ;water/lava top
+  .byte $26, $26, $26, $26 ;water/lava
+  .byte $b0, $b1, $b2, $b3 ;cloud level terrain
+  .byte $77, $79, $77, $79 ;bowser's bridge
+
+Palette3_MTiles:
+  .byte $53, $55, $54, $56 ;question block (coin)
+  .byte $53, $55, $54, $56 ;question block (power-up)
+  .byte $a5, $a7, $a6, $a8 ;coin
+  .byte $c2, $c4, $c3, $c5 ;underwater coin
+  .byte $57, $59, $58, $5a ;empty block
+  .byte $7b, $7d, $7c, $7e ;axe
+.else
 
 Palette0_MTiles:
   .byte $24, $24, $24, $24 ;blank
@@ -1426,6 +1668,7 @@ Palette3_MTiles:
   .byte $c2, $c4, $c3, $c5 ;underwater coin
   .byte $57, $59, $58, $5a ;empty block
   .byte $7b, $7d, $7c, $7e ;axe
+.endif
 
 ;------------------------------------------------------------------------------------
 
@@ -1541,7 +1784,7 @@ JumpEngine:
 InitializeNameTables:
               lda PPU_STATUS            ;reset flip-flop
               lda Mirror_PPU_CTRL       ;load mirror of first ppu control reg
-              ora #%00001000            ;set background for first 4k and sprites for second 4k
+              ora #%00001000            ;set sprites for first 4k and background for second 4k
               and #%11101000            ;clear rest of lower nybble, leave higher alone
               jsr WritePPUReg1
               lda #$24                  ;set vram address to start of name table 1
@@ -1668,9 +1911,13 @@ WritePPUReg1:
 
 ;status bar name table offset and length data
 StatusBarData:
+.ifdef ANN
+      .byte $f1, $06 ; top score display on title screen
+.else
       .byte $ef, $06 ; top score display on title screen
+.endif
       .byte $62, $06 ; player score
-      .byte $6b, $02 ; coin tally
+      .byte $6d, $02 ; coin tally
       .byte $7a, $03 ; game timer
 
 StatusBarOffset:
@@ -1782,9 +2029,6 @@ DefaultSprOffsets:
       .byte $04, $30, $48, $60, $78, $90, $a8, $c0
       .byte $d8, $e8, $24, $f8, $fc, $28, $2c
 
-Sprite0Data:
-      .byte $18, $ee, $23, $58
-
 ;-------------------------------------------------------------------------------------
 
 InitializeArea:
@@ -1839,15 +2083,21 @@ DoneInitArea:  lda #Silence             ;silence music
                sta AreaMusicQueue
                lda #$01                 ;disable screen output
                sta DisableScreenFlag
+.ifdef ANN
+               jmp IncModeTask
+.else
                inc OperMode_Task        ;increment task for this mode
                rts
+.endif
 
 ;-------------------------------------------------------------------------------------
 
 SecondaryGameSetup:
        lda #$00
        sta DisableScreenFlag    ;reenable screen, reset some flags
+.ifndef ANN
        sta WindFlag
+.endif
        sta FlagpoleMusicFlag
        tay
 ClearVRLoop: sta VRAM_Buffer1-1,y      ;clear buffer at $0300-$03ff
@@ -1878,6 +2128,7 @@ ShufAmtLoop: lda DefaultSprOffsets,x
              inc IRQUpdateFlag
              inc OperMode_Task
              rts
+
 ;-------------------------------------------------------------------------------------
 
 InitializeMemory:
@@ -2011,6 +2262,16 @@ SetPESub: lda #$07                    ;set to run player entrance subroutine
 
 ;page numbers are in order from level numbers 1 to 4
 HalfwayPageNybbles:
+.ifdef ANN
+      .byte $56, $40
+      .byte $65, $70
+      .byte $66, $40
+      .byte $66, $40
+      .byte $66, $60
+      .byte $66, $60
+      .byte $67, $80
+      .byte $00, $00
+.else
       .byte $66, $60
       .byte $88, $60
       .byte $66, $70
@@ -2020,8 +2281,13 @@ HalfwayPageNybbles:
       .byte $70, $b0
       .byte $00, $00
       .byte $00, $00
-      .byte $76, $50 ;worlds A-D halfway pages
+.endif
+      .byte $76, $50
+.ifdef ANN
+      .byte $D5, $70
+.else
       .byte $65, $50
+.endif
       .byte $75, $b0
       .byte $00, $00
 
@@ -2041,8 +2307,12 @@ PlayerLoseLife:
 StillInGame: lda WorldNumber          ;retrieve world number for offset
              ldy HardWorldFlag        ;check if playing worlds A-D
              beq NrmlWorlds           ;if not, use world number as-is
-             clc                      ;otherwise add nine for correct halfway pages
-             adc #$09
+             clc
+.ifdef ANN
+             adc #$08                 ;otherwise add eight for correct halfway pages
+.else
+             adc #$09                 ;otherwise add nine for correct halfway pages
+.endif
 NrmlWorlds:  asl                      ;multiply by 2 to get offset
              tax
              lda LevelNumber          ;if in level 3 or 4, increment
@@ -2086,18 +2356,26 @@ SetupGameOver:
       lda #$02
       sta EventMusicQueue    ;play game over music
       inc DisableScreenFlag
+.ifdef ANN
+      jmp IncModeTask
+.else
       inc OperMode_Task
       rts
+.endif
 
 RunGameOver:
        lda #$00
        sta DisableScreenFlag
+.ifdef ANN
+       jmp GameOverMenu
+.else
        lda WorldNumber       ;if on world 9, branch on to end the game
        cmp #World9
        beq W9End
        jmp GameOverMenu      ;otherwise run game over menu
 W9End: lda ScreenTimer
        bne ExRGO
+.endif
 
 TerminateGame:
        lda #Silence          ;silence music
@@ -2221,8 +2499,13 @@ FSceneDataOffsets:
 
 ForeSceneryData:
    .byte $86, $87, $87, $87, $87, $87, $87   ;in water
-   .byte $87, $87, $87, $87, $6a, $6a
-
+   .byte $87, $87, $87, $87
+.ifdef ANN
+   .byte $69, $69
+.else
+   .byte $6a, $6a
+.endif   
+ 
    .byte $00, $00, $00, $00, $00, $45, $47   ;wall
    .byte $47, $47, $47, $47, $00, $00
 
@@ -2230,7 +2513,11 @@ ForeSceneryData:
    .byte $00, $00, $00, $00, $86, $87
 
 TerrainMetatiles:
+.ifdef ANN
+      .byte $69, $6a, $52, $62
+.else
       .byte $6a, $6b, $50, $63
+.endif
 
 TerrainRenderBits:
       .byte %00000000, %00000000 ;no ceiling or floor
@@ -2318,7 +2605,11 @@ RendTerr: ldy AreaType               ;check world type for water level
           lda WorldNumber            ;check world number, if not world number eight
           cmp #World8                ;then skip this part
           bne TerMTile
+.ifdef ANN
+          lda #$62
+.else
           lda #$63                   ;if set as water level and world number eight,
+.endif
           jmp StoreMT                ;use castle wall metatile as terrain type
 TerMTile: lda TerrainMetatiles,y     ;otherwise get appropriate metatile for area type
           ldy CloudTypeOverride      ;check for cloud type override
@@ -2354,7 +2645,11 @@ NextTBit: inx                        ;continue until end of buffer
           bne EndUChk                ;if not underground, skip this part
           cpx #$0b
           bne EndUChk                ;if we're at the bottom of the screen, override
+.ifdef ANN
+          lda #$6A
+.else
           lda #$6b                   ;old terrain type with ground level terrain type
+.endif
           sta $07
 EndUChk:  iny                        ;increment bitmasks offset in Y
           cpy #$08
@@ -2391,7 +2686,11 @@ StrBlock: ldy $00                    ;get offset for block buffer
 ;numbers lower than these with the same attribute bits
 ;will not be stored in the block buffer
 BlockBuffLowBounds:
+.ifdef ANN
+      .byte $10, $51, $88, $c0
+.else
       .byte $10, $4f, $88, $c0
+.endif
 
 ;-------------------------------------------------------------------------------------
 ;$00 - used to store area object identifier
@@ -2485,11 +2784,19 @@ ChkRow14: stx $07                    ;store whatever value we just loaded here
           bne ChkRow13
           lda #$00                   ;if so, load offset with $00
           sta $07
+.ifdef ANN
+          lda #$31
+.else
           lda #$36                   ;and load A with another value
+.endif
           bne NormObj                ;unconditional branch
 ChkRow13: cmp #$0d                   ;row 13?
           bne ChkSRows
+.ifdef ANN
+          lda #$25
+.else
           lda #$28                   ;if so, load offset with 40
+.endif
           sta $07
           iny                        ;get next byte
           lda (AreaData),y
@@ -2598,14 +2905,20 @@ RunAObj:  lda $00                    ;get stored value and add offset to it
  .word QuestionBlock
  .word QuestionBlock
  .word QuestionBlock
+ .ifndef ANN
  .word QuestionBlock
+ .endif
  .word Hidden1UpBlock
  .word QuestionBlock
+ .ifndef ANN
  .word QuestionBlock
+ .endif
  .word BrickWithItem
  .word BrickWithItem
  .word BrickWithItem
+ .ifndef ANN
  .word BrickWithItem
+ .endif
  .word BrickWithCoins
  .word BrickWithItem
  .word WaterPipe
@@ -2624,8 +2937,10 @@ RunAObj:  lda $00                    ;get stored value and add offset to it
  .word AreaFrenzy
  .word AreaFrenzy
  .word LoopCmdE
+.ifndef ANN
  .word WindOn                ;these two are in SM2DATA2 and SM2DATA4
  .word WindOff
+.endif
 
  .word AlterAreaAttributes
 
@@ -2665,6 +2980,32 @@ SetFore: sta ForegroundScenery     ;otherwise set new foreground scenery bits
 ;--------------------------------
 
 ScrollLockObject_Warp:
+.ifdef ANN
+      ldx #$80                 ;use base number for warp to world 2
+      lda HardWorldFlag        ;if on worlds A-D, skip ahead to next part
+      bne WarpWorldsAThruD     ;note d7 is set in all entries to prevent zero condition
+      lda WorldNumber          ;from happening in warp zone code elsewhere
+      beq BaseW                ;if not on world 1, branch to handle a different way
+      inx
+      ldy AreaType
+      dey
+      bne BaseW
+      jmp Warp2
+
+WarpWorldsAThruD:
+      ldx #$84
+      lda WorldNumber
+      bne Warp2
+      dex
+      ldy LevelNumber
+      dey
+      beq BaseW
+
+Warp2:
+      inx
+BaseW:
+      txa
+.else
          ldx #$80                 ;use base number for warp to world 2
          lda HardWorldFlag        ;if on worlds A-D, skip ahead to next part
          bne WarpWorldsAThruD     ;note d7 is set in all entries to prevent zero condition
@@ -2705,6 +3046,7 @@ W678Warp: inx                  ;add 1, 2, or 3 to base number or use as-is
 W5Warp3:  inx                  ;depending on where branched
 W5Warp2:  inx
 BaseW:    txa
+.endif
 
 DumpWarpCtrl:
       sta WarpZoneControl      ;set warp zone control
@@ -2757,9 +3099,12 @@ AreaStyleObject:
       lda AreaStyle        ;load level object style and jump to the right sub
       jsr JumpEngine 
       .word TreeLedge        ;also used for cloud bonus levels
+.ifdef ANN
+      .word MushroomLedge
+.else
       .word CloudLedge
+.endif
       .word BulletBillCannon
-
 TreeLedge:
           jsr GetLrgObjAttrib     ;get row and length of green ledge
           lda AreaObjectLength,x  ;check length counter for expiration
@@ -2782,6 +3127,31 @@ EndTreeL: lda #$18                ;render end of tree ledge
 
 ;note: This is the style utilized by world 8-3 and part of world 8-2, and not to
 ;be confused with the cloud-type bonus levels full of coins found throughout the game.
+.ifdef ANN
+MushroomLedge:
+          jsr ChkLrgObjLength        ;get shroom dimensions
+          sty $06                    ;store length here for now
+          bcc EndMushL
+          lda AreaObjectLength,x     ;divide length by 2 and store elsewhere
+          lsr
+          sta MushroomLedgeHalfLen,x
+          lda #$19                   ;render start of mushroom
+          jmp NoUnder
+EndMushL: lda #$1b                   ;if at the end, render end of mushroom
+          ldy AreaObjectLength,x
+          beq NoUnder
+          lda MushroomLedgeHalfLen,x ;get divided length and store where length
+          sta $06                    ;was stored originally
+          ldx $07
+          lda #$1a
+          sta MetatileBuffer,x       ;render middle of mushroom
+          cpy $06                    ;are we smack dab in the center?
+          bne MushLExit              ;if not, branch to leave
+          inx
+          lda #$4f
+          sta MetatileBuffer,x       ;render stem top of mushroom underneath the middle
+          lda #$50
+.else
 CloudLedge:
           jsr ChkLrgObjLength        ;get cloud dimensions 
           sty $06                    ;store length here for now
@@ -2800,6 +3170,7 @@ EndCloud: lda #$8c                   ;if at the end, render end of cloud
           lda #$8b
           sta MetatileBuffer,x       ;render middle of cloud
           rts
+.endif
 
 AllUnder: inx
           ldy #$0f                   ;set $0f to render all way down
@@ -2894,7 +3265,12 @@ NotTall:    cmp #$02                 ;if not tall castle, check to see if we're 
             lda #StarFlagObject      ;set star flag value in buffer itself
             sta Enemy_ID,x
             rts
-PlayerStop: ldy #$50                 ;put brick at floor to stop player at end of level
+PlayerStop: 
+.ifdef ANN
+            ldy #$52                 ;put brick at floor to stop player at end of level
+.else
+            ldy #$50                 ;put brick at floor to stop player at end of level
+.endif
             sty MetatileBuffer+10    ;this is only done if we're on the second column
 ExitCastle: rts
 
@@ -2904,10 +3280,17 @@ WaterPipe:
       jsr GetLrgObjAttrib     ;get row and lower nybble
       ldy AreaObjectLength,x  ;get length (residual code, water pipe is 1 col thick)
       ldx $07                 ;get row
+.ifdef ANN
+      lda #$6c
+      sta MetatileBuffer,x    ;draw something here and below it
+      lda #$6d
+      sta MetatileBuffer+1,x
+.else
       lda #$6d
       sta MetatileBuffer,x    ;draw something here and below it
       lda #$6e
       sta MetatileBuffer+1,x
+.endif
       rts
 
 ;--------------------------------
@@ -2933,12 +3316,21 @@ NoBlankP:      rts
 SidePipeShaftData:
       .byte $15, $14  ;used to control whether or not vertical pipe shaft
       .byte $00, $00  ;is drawn, and if so, controls the metatile number
+.ifdef ANN
+SidePipeTopPart:
+      .byte $15, $1e  ;top part of sideways part of pipe
+      .byte $1d, $1c
+SidePipeBottomPart: 
+      .byte $15, $21  ;bottom part of sideways part of pipe
+      .byte $20, $1f
+.else
 SidePipeTopPart:
       .byte $15, $1b  ;top part of sideways part of pipe
       .byte $1a, $19
 SidePipeBottomPart: 
       .byte $15, $1e  ;bottom part of sideways part of pipe
       .byte $1d, $1c
+.endif
 
 ExitPipe:
       ldy #$03                 ;check if length set, if not set, set it
@@ -2987,6 +3379,12 @@ WarpPipe: tya                      ;save value in stack
           beq DrawPipe             ;(because we only need to do this once)
           jsr FindEmptyEnemySlot   ;check for an empty moving data buffer space
           bcs DrawPipe             ;if not found, too many enemies, thus skip
+.ifdef ANN
+          lda WorldNumber          ;skip adding piranha plant in 1-1
+          ora AreaNumber
+          ora HardWorldFlag
+          beq DrawPipe
+.endif
           lda #PiranhaPlant
           jsr SetupPiranhaPlant
 
@@ -3082,7 +3480,11 @@ Bridge_Low:
       sta MetatileBuffer,x
       inx
       ldy #$00             ;now render the bridge itself
+.ifdef ANN
+      lda #$63
+.else
       lda #$64
+.endif
       jmp RenderUnderPart
 
 ;--------------------------------
@@ -3090,19 +3492,35 @@ Bridge_Low:
 FlagBalls_Residual:
       jsr GetLrgObjAttrib  ;get low nybble from object byte
       ldx #$02             ;render flag balls on third row from top
+.ifdef ANN
+      lda #$6e             ;of screen downwards based on low nybble
+.else
       lda #$6f             ;of screen downwards based on low nybble
+.endif
       jmp RenderUnderPart
 
 ;--------------------------------
 
 FlagpoleObject:
+.ifdef ANN
+      lda #$24                 ;render flagpole ball on top
+.else
       lda #$21                 ;render flagpole ball on top
+.endif
       sta MetatileBuffer
       ldx #$01                 ;now render the flagpole shaft
       ldy #$08
+.ifdef ANN
+      lda #$25
+.else
       lda #$22
+.endif
       jsr RenderUnderPart
+.ifdef ANN
+      lda #$61
+.else
       lda #$62                 ;render solid block at the bottom
+.endif
       sta MetatileBuffer+10
       jsr GetAreaObjXPosition
       sec                      ;get pixel coordinate of where the flagpole is,
@@ -3144,7 +3562,11 @@ DrawRope: lda #$40            ;render the actual rope
 ;--------------------------------
 
 CoinMetatileData:
+.ifdef ANN
+      .byte $c3, $c2, $c2, $c2
+.else
       .byte $c4, $c3, $c3, $c3
+.endif
 
 RowOfCoins:
       ldy AreaType            ;get area type
@@ -3157,7 +3579,12 @@ C_ObjectRow:
       .byte $06, $07, $08
 
 C_ObjectMetatile:
-      .byte $c6, $0c, $89
+.ifdef ANN
+      .byte $c5
+.else
+      .byte $c6
+.endif
+      .byte $0c, $89
 
 CastleBridgeObj:
       ldy #$0c                  ;load length of 13 columns
@@ -3177,17 +3604,29 @@ ChainObj:
 EmptyBlock:
         jsr GetLrgObjAttrib  ;get row location
         ldx $07
+.ifdef ANN
+        lda #$c4
+.else
         lda #$c5
+.endif
 ColObj: ldy #$00             ;column length of 1
         jmp RenderUnderPart
 
 ;--------------------------------
 
 SolidBlockMetatiles:
+.ifdef ANN
+      .byte $69, $61, $61, $62
+.else
       .byte $6a, $62, $62, $63
+.endif
 
 BrickMetatiles:
+.ifdef ANN
+      .byte $22, $51, $52, $52
+.else
       .byte $1f, $4f, $50, $50
+.endif
       .byte $88 ;used only by row of bricks object
 
 RowOfBricks:
@@ -3227,17 +3666,29 @@ GetRow2: pha                        ;save metatile to stack for now
 BulletBillCannon:
              jsr GetLrgObjAttrib      ;get row and length of bullet bill cannon
              ldx $07                  ;start at first row
+.ifdef ANN
+             lda #$64                 ;render bullet bill cannon
+.else
              lda #$65                 ;render bullet bill cannon
+.endif
              sta MetatileBuffer,x
              inx
              dey                      ;done yet?
              bmi SetupCannon
+.ifdef ANN
+             lda #$65                 ;if not, render middle part
+.else
              lda #$66                 ;if not, render middle part
+.endif
              sta MetatileBuffer,x
              inx
              dey                      ;done yet?
              bmi SetupCannon
+.ifdef ANN
+             lda #$66                 ;if not, render bottom until length expires
+.else
              lda #$67                 ;if not, render bottom until length expires
+.endif
              jsr RenderUnderPart
 SetupCannon: ldx Cannon_Offset        ;get offset for data used by cannons and whirlpools
              jsr GetAreaObjYPosition  ;get proper vertical coordinate for cannon
@@ -3271,7 +3722,11 @@ NextStair: dec StaircaseControl      ;move onto next step (or first if starting)
            ldx StaircaseRowData,y    ;get starting row and height to render
            lda StaircaseHeightData,y
            tay
+.ifdef ANN
+           lda #$61                  ;now render solid block staircase
+.else
            lda #$62                  ;now render solid block staircase
+.endif
            jmp RenderUnderPart
 
 ;--------------------------------
@@ -3293,10 +3748,17 @@ Jumpspring:
       sty Enemy_Y_HighPos,x       ;store vertical high byte
       inc Enemy_Flag,x            ;set flag for enemy object buffer
       ldx $07
+.ifdef ANN
+      lda #$67                    ;draw metatiles in two rows where jumpspring is
+      sta MetatileBuffer,x
+      lda #$68
+      sta MetatileBuffer+1,x
+.else
       lda #$68                    ;draw metatiles in two rows where jumpspring is
       sta MetatileBuffer,x
       lda #$69
       sta MetatileBuffer+1,x
+.endif
 NoJs: rts
 
 ;--------------------------------
@@ -3324,7 +3786,11 @@ BrickWithItem:
           ldy AreaType                ;check level type for ground level
           dey
           beq BWithL                  ;if ground type, do not start with 6
+.ifdef ANN
+          lda #$05                    ;otherwise use adder for bricks without lines
+.else
           lda #$06                    ;otherwise use adder for bricks without lines
+.endif         
 BWithL:   clc                         ;add object ID to adder
           adc $07
           tay                         ;use as offset for metatile
@@ -3384,12 +3850,22 @@ RenderUnderPart:
              beq DrawThisRow       ;we need to keep, if nothing, go ahead
              cpy #$17
              beq WaitOneRow        ;if middle part (tree ledge), wait until next row
+.ifdef ANN
+             cpy #$1a
+.else
              cpy #$8b
+.endif
              beq WaitOneRow        ;if middle part (cloud ledge), wait until next row
              cpy #$c0
              beq DrawThisRow       ;if question block w/ coin, overwrite
              cpy #$c0
              bcs WaitOneRow        ;if any other metatile with palette 3, wait until next row
+.ifdef ANN
+             cpy #$6a
+             bne DrawThisRow
+             cmp #$50
+             beq WaitOneRow
+.endif
 DrawThisRow: sta MetatileBuffer,x  ;render contents of A from routine that called this
 WaitOneRow:  inx
              cpx #$0d              ;stop rendering if we're at the bottom of the screen
@@ -3476,6 +3952,9 @@ GameModeSubs:
 
       .word GameModeDiskRoutines
       .word InitializeArea
+.ifdef ANN
+      .word LoadWorldMushroomRetainer
+.endif
       .word ScreenRoutines
       .word SecondaryGameSetup
       .word GameCoreRoutine
@@ -3483,7 +3962,11 @@ GameModeSubs:
 GameCoreRoutine:
       jsr GameRoutines           ;execute one of many possible subs
       lda OperMode_Task          ;check major task of operating mode
+.ifdef ANN
+      cmp #$05                   ;if we are supposed to be here,
+.else
       cmp #$04                   ;if we are supposed to be here,
+.endif
       bcs GameEngine             ;branch to the game engine itself
       rts
 
@@ -3512,9 +3995,11 @@ ProcELoop:    stx ObjectOffset           ;put incremented offset in X as enemy o
               jsr FlagpoleRoutine        ;process the flagpole
               jsr RunGameTimer           ;count down the game timer
               jsr ColorRotation          ;cycle one of the background colors
+.ifndef ANN
               lda FileListNumber
               beq NoWind                 ;if in worlds 1-4, skip ahead
               jsr SimulateWind           ;otherwise, simulate wind where needed
+.endif
 NoWind:       lda Player_Y_HighPos
               cmp #$02                   ;if player is below the screen, don't bother with the music
               bpl NoChgMus
@@ -3580,8 +4065,8 @@ ChkNearMid: lda Player_Pos_ForScroll
             ldy Player_X_Scroll       ;otherwise get original value undecremented
 
 ScrollScreen:
-              lda IRQAckFlag
-              bne ScrollScreen           ;loop if IRQ has not yet happened
+			  lda IRQAckFlag
+			  bne ScrollScreen           ;loop if IRQ has not yet happened
               tya
               sta ScrollAmount           ;save value here
               clc
@@ -3900,8 +4385,12 @@ EnterSidePipe:
            sta Player_X_Speed     ;if lower nybble = 0, set as horizontal speed
            tay                    ;and nullify controller bit override here
 RightPipe: tya                    ;use contents of Y to
+.ifdef ANN
+           jmp AutoControlPlayer  ;execute player control routine with ctrl bits nulled
+.else
            jsr AutoControlPlayer  ;execute player control routine with ctrl bits nulled
            rts
+.endif
 
 ;-------------------------------------------------------------------------------------
 
@@ -3998,6 +4487,10 @@ NoFPObj:     inc GameEngineSubroutine ;increment to next routine (this may
              rts                      ;be residual code)
 
 ;-------------------------------------------------------------------------------------
+.ifdef ANN
+Hidden1UpCoinAmts:
+      .byte $14, $1E, $14, $1B, $13, $18, $13, $63
+.endif
 
 PlayerEndLevel:
           lda #$01                  ;force player to walk to the right
@@ -4029,10 +4522,15 @@ RdyNextA: lda StarFlagTaskControl
           bne NextArea              ;and skip this last part here if not
           ldy WorldNumber           ;get world number as offset
           lda CoinTallyFor1Ups      ;check third area coin tally for bonus 1-ups
+.ifdef ANN
+          cmp Hidden1UpCoinAmts,y   ;against minimum value, if player has not collected
+.else
           cmp #$0a                  ;against minimum value, if player has not collected
+.endif
           bcc NextArea              ;at least this number of coins, leave flag clear
           inc Hidden1UpFlag         ;otherwise set hidden 1-up box control flag
 NextArea: inc AreaNumber            ;increment area number used for address loader
+.ifndef ANN
           lda WorldNumber
           cmp #$08
           bne NotW9                 ;if not at end of world 9-4, branch
@@ -4042,6 +4540,7 @@ NextArea: inc AreaNumber            ;increment area number used for address load
           lda #$00
           sta LevelNumber
           sta AreaNumber
+.endif
 NotW9:    jsr RunLoadAreaPointer    ;get new level pointer
           inc FetchNewGameTimerFlag ;set flag to load new game timer
           jsr ChgAreaMode           ;do sub to set secondary mode, disable screen and IRQ
@@ -4089,10 +4588,13 @@ OnGroundStateSub:
 GndMove: jsr ImposeFriction         ;do a sub to impose friction on player's walk/run
 JmpMove: jsr MovePlayerHorizontally ;do another sub to move player horizontally
          sta Player_X_Scroll        ;set returned value as player's movement speed for scroll
+.ifndef ANN
          lda FileListNumber         ;if in worlds 1-4 don't bother checking for wind
          beq ExOGSS
          jsr BlowPlayerAround
-ExOGSS:  rts
+ExOGSS: 
+.endif
+         rts
 
 ;--------------------------------
 
@@ -4871,6 +5373,18 @@ PosJSpr:   lda Jumpspring_FixedYPos,x  ;get permanent vertical position
            tya
            pha
            lda #$f4                    ;set jumpspring force for red jumpsprings
+.ifdef ANN
+           ldy HardWorldFlag
+           beq SetJSF
+           ldy WorldNumber
+           cpy #$01
+           beq @Shift
+           cpy #$02
+           bne @Done
+@Shift:
+           lda #$e0
+@Done:
+.else
            ldy WorldNumber
            cpy #World2
            beq GreenJS                 ;if world number is 2, 3 or 7
@@ -4879,6 +5393,7 @@ PosJSpr:   lda Jumpspring_FixedYPos,x  ;get permanent vertical position
            cpy #World7                 ;otherwise use red jumpspring force
            bne SetJSF
 GreenJS:   lda #$e0
+.endif
 SetJSF:    sta JumpspringForce         ;otherwise write new jumpspring force here
            pla
            tay
@@ -4979,7 +5494,11 @@ WrCMTile:   lda VineHeight            ;check vine height
             bcs ChkVOffscr            ;current block buffer, branch to leave, do not write
             lda ($06),y               ;otherwise check contents of block buffer at 
             bne ChkVOffscr            ;current offset, if not empty, branch to leave
+.ifdef ANN
+            lda #$26
+.else
             lda #$23
+.endif
             sta ($06),y               ;otherwise, write climbing metatile to block buffer
 ChkVOffscr: lda Enemy_X_Position+5
             sec
@@ -5006,6 +5525,11 @@ VineOffscr: lda #$00                  ;erase vine's flag to kill it
             lsr
 EraseClM:   tay
             lda ($06),y               ;check for climbing metatile
+.ifdef ANN
+            cmp #$26
+.else
+            cmp #$23                  ;if not found, move down a row
+.endif
             cmp #$23                  ;if not found, move down a row
             bne NoClimbM
             lda #$00                  ;otherwise erase climbing metatile
@@ -5495,9 +6019,17 @@ DBlockSte: sta Block_State,x        ;store into block object buffer
 ChkBrick:  bcc PutMTileB            ;if no match was found in previous sub, skip ahead
            ldy #$11                 ;otherwise load unbreakable state into block object buffer
            sty Block_State,x        ;note this applies to both player sizes
+.ifdef ANN
+           lda #$c4                 ;load empty block metatile into A for now
+.else
            lda #$c5                 ;load empty block metatile into A for now
+.endif
            ldy $00                  ;get metatile from before
+.ifdef ANN
+           cpy #$57                 ;is it brick with coins (with line)?
+.else
            cpy #$56                 ;is it brick with coins (with line)?
+.endif
            beq StartBTmr            ;if so, branch
            cpy #$5c                 ;is it brick with coins (without line)?
            bne PutMTileB            ;if not, branch ahead to store empty block metatile
@@ -5508,12 +6040,20 @@ StartBTmr: lda BrickCoinTimerFlag   ;check brick coin timer flag
            inc BrickCoinTimerFlag   ;and set flag linked to it
 ContBTmr:  lda BrickCoinTimer       ;check brick coin timer
            bne PutOldMT             ;if not yet expired, branch to use current metatile
+.ifdef ANN
+           ldy #$c4                 ;otherwise use empty block metatile
+.else
            ldy #$c5                 ;otherwise use empty block metatile
+.endif
 PutOldMT:  tya                      ;put metatile into A
 PutMTileB: sta Block_Metatile,x     ;store whatever metatile be appropriate here
            jsr InitBlock_XY_Pos     ;get block object horizontal coordinates saved
            ldy $02                  ;get vertical high nybble offset
+.ifdef ANN
+           lda #$23
+.else
            lda #$20
+.endif
            sta ($06),y              ;write blank metatile $20 to block buffer
            lda #$10
            sta BlockBounceTimer     ;set block bounce timer
@@ -5573,20 +6113,32 @@ BumpBlock:
            jsr BlockBumpedChk      ;do a sub to check which block player bumped head on
            bcc ExitBlockChk        ;if no match was found, branch to leave
            tya                     ;move block number to A
+.ifdef ANN
+           cmp #$0a                ;if block number was within 0-$c range,
+           bcc BlockCode           ;branch to use current number
+           sbc #$05                ;otherwise subtract 5 for second set to get proper number
+.else
            cmp #$0d                ;if block number was within 0-$c range,
            bcc BlockCode           ;branch to use current number
            sbc #$06                ;otherwise subtract 6 for second set to get proper number
+.endif
 BlockCode: jsr JumpEngine          ;run appropriate subroutine depending on block number
 
       .word MushFlowerBlock
+.ifndef ANN
       .word PoisonMushBlock
+.endif
       .word CoinBlock
       .word CoinBlock
       .word ExtraLifeMushBlock
+.ifndef ANN
       .word PoisonMushBlock
+.endif
       .word MushFlowerBlock
       .word MushFlowerBlock
+.ifndef ANN
       .word PoisonMushBlock
+.endif
       .word VineBlock
       .word StarBlock
       .word CoinBlock
@@ -5600,9 +6152,11 @@ StarBlock:
       lda #$02                ;load star type
       .byte $2c
 
+.ifndef ANN
 PoisonMushBlock:
       lda #$04                ;load poison mushroom type
       .byte $2c
+.endif
 
 ExtraLifeMushBlock:
       lda #$03                ;load 1-up mushroom type
@@ -5620,13 +6174,23 @@ ExitBlockChk:
 ;--------------------------------
 
 BrickQBlockMetatiles:
+.ifdef ANN
+      .byte $C1,$C0,$5E,$5F,$60
+      .byte $54,$55,$56,$57,$58
+      .byte $59,$5A,$5B,$5C,$5D
+.else
       .byte $c1, $c2, $c0, $5e, $5f, $60, $61 ;used by question blocks
 
       .byte $52, $53, $54, $55, $56, $57 ;used by ground level bricks
       .byte $58, $59, $5a, $5b, $5c, $5d ;used by other level bricks
+.endif
 
 BlockBumpedChk:
+.ifdef ANN
+             ldy #$0e                    ;start at end of metatile data
+.else
              ldy #$12                    ;start at end of metatile data
+.endif
 BumpChkLoop: cmp BrickQBlockMetatiles,y  ;check to see if current metatile matches
              beq MatchBump               ;metatile found in block buffer, branch if so
              dey                         ;otherwise move onto next metatile
@@ -5662,7 +6226,11 @@ CheckTopOfBlock:
        sta $02                 ;store as new vertical high nybble offset
        tay 
        lda ($06),y             ;get contents of block buffer in same column, one row up
+.ifdef ANN
+       cmp #$c2                ;is it a coin? (not underwater)
+.else
        cmp #$c3                ;is it a coin? (not underwater)
+.endif
        bne TopEx               ;if not, branch to leave
        lda #$00
        sta ($06),y             ;otherwise put blank metatile where coin was
@@ -6048,6 +6616,20 @@ ExitELCore: rts
 ;used at one point, but the area data that ref'd it
 ;is now missing the loop command object)
 
+.ifdef ANN
+LoopCmdWorldNumber:
+  .byte $03, $03, $06, $06, $06, $06, $06, $06, $07, $07
+
+LoopCmdPageNumber:
+  .byte $05, $09, $04, $05, $06, $08, $09, $0A, $05, $0B
+
+LoopCmdYPosition:
+  .byte $B0, $40, $40, $40, $40, $40, $80, $80, $F0, $B0
+
+MultiLoopCount:
+  .byte $01, $01, $03, $03, $03, $03, $03, $03, $01, $01
+
+.else
 LoopCmdWorldNumber:
   .byte $02, $02, $02, $02, $05, $05, $05, $05, $06, $07, $07, $04
 
@@ -6059,6 +6641,7 @@ LoopCmdYPosition:
 
 MultiLoopCount:
   .byte $02, $02, $02, $02, $02, $02, $02, $02, $01, $01, $01, $01
+.endif
 
 ExecGameLoopback:
       lda Player_PageLoc        ;send player back four pages
@@ -6095,7 +6678,11 @@ ProcLoopCommand:
           beq ChkEnemyFrenzy
           lda CurrentColumnPos      ;check to see if we're still on the first page
           bne ChkEnemyFrenzy        ;if not, do not loop yet
+.ifdef ANN
+          ldy #$0a
+.else
           ldy #$0c                  ;start at the end of each set of loop data
+.endif
 FindLoop: dey
           bmi ChkEnemyFrenzy        ;if all data is checked and not match, do not loop
           lda WorldNumber           ;check to see if one of the world numbers
@@ -6251,6 +6838,10 @@ BuzzyBeetleMutate:
         bne StrID            ;value ($3f or more always fails)
         ldy PrimaryHardMode  ;check if primary hard mode flag is set
         beq StrID            ;and if so, change goomba to buzzy beetle
+.ifdef ANN
+        ldy HardWorldFlag
+        bne StrID
+.endif
         lda #BuzzyBeetle
 StrID:  sta Enemy_ID,x       ;store enemy object number into buffer
         lda #$01
@@ -6281,9 +6872,11 @@ DoGroup:
 ParseRow0e:
         iny                      ;increment Y to load third byte of object
         iny
+.ifndef ANN
         lda WorldNumber
         cmp #World9              ;skip world number check if on world 9
         beq W9Skip
+.endif
         lda (EnemyData),y
         lsr                      ;move 3 MSB to the bottom, effectively
         lsr                      ;making %xxx00000 into %00000xxx
@@ -6544,10 +7137,14 @@ CreateL:  lda #$00                ;initialize enemy state
           jsr SetupLakitu         ;do a sub to set up lakitu
           lda #$20
           ldy HardWorldFlag
+.ifdef ANN
+          beq SetLakXY
+.else
           bne SetLowLY            ;if in worlds A-D, put lakitu lower on the screen
           ldy WorldNumber
           cpy #$06                ;if in worlds 1-6, branch to use default high position
           bcc SetLakXY            ;otherwise put lakitu lower on the screen
+.endif
 SetLowLY: lda #$60
 SetLakXY: jsr PutAtRightExtent    ;finish setting up lakitu
 RetEOfs:  ldx ObjectOffset        ;get enemy object buffer offset again and leave
@@ -7018,6 +7615,10 @@ HandleGroupEnemies:
         ldy #Goomba               ;load value for goomba enemy
         lda PrimaryHardMode       ;if primary hard mode flag not set,
         beq PullID                ;branch, otherwise change to value
+.ifdef ANN
+        lda HardWorldFlag
+        bne PullID
+.endif
         ldy #BuzzyBeetle          ;for buzzy beetle
 PullID: pla                       ;get second copy from stack
 SnglID: sty $01                   ;save enemy id here
@@ -7099,8 +7700,10 @@ InitEnemyFrenzy:
       .word InitFireworks
       .word BulletBillCheepCheep
 
+.ifndef ANN
 NoFrenzyCode:
       rts
+.endif
 
 EndFrenzy:
            ldy #$05               ;start at last slot
@@ -7114,6 +7717,9 @@ NextFSlot: dey                    ;move onto the next slot
            lda #$00
            sta EnemyFrenzyBuffer  ;empty enemy frenzy buffer
            sta Enemy_Flag,x       ;disable enemy buffer flag for this object
+.ifdef ANN
+NoFrenzyCode:
+.endif
            rts
 
 ;--------------------------------
@@ -7121,7 +7727,11 @@ NextFSlot: dey                    ;move onto the next slot
 InitJumpGPTroopa:
            lda #$02                  ;set for movement to the left
            sta Enemy_MovingDir,x
+.ifdef ANN
+           lda #$f8
+.else
            lda #$f4                  ;set horizontal speed
+.endif
            sta Enemy_X_Speed,x
 TallBBox2: lda #$03                  ;set specific value for bounding box control
 SetBBox2:  sta Enemy_BoundBoxCtrl,x  ;set bounding box control then leave
@@ -7246,13 +7856,16 @@ PosPlatform:
       lda Enemy_PageLoc,x
       adc PlatPosDataHigh,y   ;add or subtract page location depending on offset
       sta Enemy_PageLoc,x     ;store as new page location
+.ifdef ANN
+EndOfEnemyInitCode:
+NoRunCode:
+NoMoveCode:
       rts                     ;and go back
-
-;--------------------------------
-
+.else
+      rts
 EndOfEnemyInitCode:
       rts
-
+.endif
 ;-------------------------------------------------------------------------------------
 
 RunEnemyObjectsCore:
@@ -7305,8 +7918,10 @@ JmpEO: jsr JumpEngine
 
 ;--------------------------------
 
+.ifndef ANN
 NoRunCode:
       rts
+.endif
 
 ;--------------------------------
 
@@ -7360,8 +7975,10 @@ EnemyMovementSubs:
 
 ;--------------------------------
 
+.ifndef ANN
 NoMoveCode:
       rts
+.endif
 
 ;--------------------------------
 
@@ -7600,6 +8217,10 @@ ReviveStunned:
          dey                       ;decrement for use as pointer
          lda PrimaryHardMode       ;check primary hard mode flag
          beq SetRSpd               ;if not set, use pointer as-is
+.ifdef ANN
+         lda HardWorldFlag
+         bne SetRSpd               ;if hard world flag set, use pointer as-is
+.endif
          iny
          iny                       ;otherwise increment 2 bytes to next data
 SetRSpd: lda RevivedXSpeed,y       ;load and store new horizontal speed
@@ -8842,6 +9463,7 @@ MovePiranhaPlant:
 
 ChkPlayerNearPipe:
       lda $00                     ;get saved horizontal difference
+.ifndef ANN
       cmp #$13
       bcc PutinPipe               ;if player within a certain distance, branch to leave
       ldy HardWorldFlag           ;are we dealing with red piranha plants?
@@ -8849,6 +9471,7 @@ ChkPlayerNearPipe:
       ldy WorldNumber
       cpy #$03
       bcs ReversePlantSpeed       ;if found, we're done here
+.endif
       cmp #$21                    ;otherwise, extend distance for green piranha plants
       bcc PutinPipe
 
@@ -8868,11 +9491,13 @@ SetupToMovePPlant:
 
 RiseFallPiranhaPlant:
        sta $00                     ;save vertical coordinate here
+.ifndef ANN
        lda HardWorldFlag           ;check for red piranha plants
        bne RedPP
        lda WorldNumber
        cmp #$03
        bcs RedPP                   ;if found, skip to next part to execute code on every frame
+.endif
        lda FrameCounter            ;get frame counter
        lsr
        bcc PutinPipe               ;branch to leave if d0 set (execute code every other frame)
@@ -10098,6 +10723,19 @@ ChkForTopCollision:
 
 SetCollisionFlag:
       ldx ObjectOffset             ;get enemy object buffer offset
+.ifdef ANN
+      pha
+      lda Player_Y_HighPos
+      cmp #$01
+      bne @Continue
+      lda Player_Y_Position
+      cmp #$DF
+      bcc @Continue
+      pla
+      rts
+@Continue:
+      pla
+.endif
       sta PlatformCollisionFlag,x  ;save either bounding box counter or enemy offset here
       lda #$00
       sta Player_State             ;set player state to normal then leave
@@ -10252,7 +10890,11 @@ HeadChk: lda Player_Y_Position       ;get player's vertical coordinate
          jmp DoFootCheck             ;jump ahead to skip these other parts here
 
 SolidOrClimb:
+.ifdef ANN
+       cmp #$26               ;if climbing metatile,
+.else
        cmp #$23               ;if climbing metatile,
+.endif
        beq NYSpd              ;branch ahead and do not play sound
        lda #Sfx_Bump
        sta Square1SoundQueue  ;otherwise load bump sound
@@ -10286,7 +10928,11 @@ ChkFootMTile:
           bcs DoPlayerSideCheck      ;if so, branch
           ldy Player_Y_Speed         ;check player's vertical speed
           bmi DoPlayerSideCheck      ;if player moving upwards, branch
+.ifdef ANN
+          cmp #$c5
+.else
           cmp #$c6
+.endif
           bne ContChk                ;if player did not touch axe, skip ahead
           jmp HandleAxeMetatile      ;otherwise jump to set modes of operation
 ContChk:  jsr ChkInvisibleMTiles     ;do sub to check for hidden coin or 1-up blocks
@@ -10328,10 +10974,17 @@ SideCheckLoop:
        bcs ExSCH                 ;branch to leave if player is too far down
        jsr BlockBufferColli_Side ;do player-to-bg collision detection on one half of player
        beq BHalf                 ;branch ahead if nothing found
+.ifdef ANN
+       cmp #$1c                  ;otherwise check for pipe metatiles
+       beq BHalf                 ;if collided with sideways pipe (top), branch ahead
+       cmp #$6c
+       beq BHalf                 ;if collided with water pipe (top), branch ahead
+.else
        cmp #$19                  ;otherwise check for pipe metatiles
        beq BHalf                 ;if collided with sideways pipe (top), branch ahead
        cmp #$6d
        beq BHalf                 ;if collided with water pipe (top), branch ahead
+.endif
        jsr CheckForClimbMTiles   ;do sub to see if player bumped into anything climbable
        bcc CheckSideMTiles       ;if not, branch to alternate section of code
 BHalf: ldy $eb                   ;load block adder offset
@@ -10366,9 +11019,15 @@ ChkPBtm:  ldy Player_State           ;get player's state
           ldy PlayerFacingDir        ;get player's facing direction
           dey
           bne StopPlayerMove         ;if facing left, branch to impede movement
+.ifdef ANN
+          cmp #$6d                   ;otherwise check for pipe metatiles
+          beq PipeDwnS               ;if collided with sideways pipe (bottom), branch
+          cmp #$1f                   ;if collided with water pipe (bottom), continue
+.else
           cmp #$6e                   ;otherwise check for pipe metatiles
           beq PipeDwnS               ;if collided with sideways pipe (bottom), branch
           cmp #$1c                   ;if collided with water pipe (bottom), continue
+.endif
           bne StopPlayerMove         ;otherwise branch to impede player's movement
 PipeDwnS: lda Player_SprAttrib       ;check player's attributes
           bne PlyrPipe               ;if already set, branch, do not play sound again
@@ -10447,9 +11106,15 @@ HandleClimbing:
 ExHC: rts                ;leave if too far left or too far right
 
 ChkForFlagpole:
+.ifdef ANN
+      cmp #$24               ;check climbing metatiles
+      beq FlagpoleCollision  ;branch if flagpole ball found
+      cmp #$25
+.else
       cmp #$21               ;check climbing metatiles
       beq FlagpoleCollision  ;branch if flagpole ball found
       cmp #$22
+.endif
       bne VineCollision      ;branch to alternate code if flagpole shaft not found
 
 FlagpoleCollision:
@@ -10490,7 +11155,11 @@ RunFR: lda #$04
        jmp PutPlayerOnVine       ;jump to end of climbing code
 
 VineCollision:
+.ifdef ANN
+      cmp #$26                  ;check for climbing metatile used on vines
+.else
       cmp #$23                  ;check for climbing metatile used on vines
+.endif
       bne PutPlayerOnVine
       lda Player_Y_Position     ;check player's vertical coordinate
       cmp #$20                  ;for being in status bar area
@@ -10535,9 +11204,13 @@ ChkInvisibleMTiles:
          beq ExCInvT
          cmp #$5f       ;check for hidden 1-up block
          beq ExCInvT
+.ifdef ANN
+         cmp #$60       ;check for hidden power-up block
+.else
          cmp #$60       ;check for hidden poison shroom block
          beq ExCInvT
          cmp #$61       ;check for hidden power-up block
+.endif
 ExCInvT: rts            ;leave with zero flag set if any of these found
 
 ;--------------------------------
@@ -10559,9 +11232,15 @@ ChkForLandJumpSpring:
 ExCJSp: rts                         ;and leave
 
 ChkJumpspringMetatiles:
+.ifdef ANN
+         cmp #$67      ;check for top jumpspring metatile
+         beq JSFnd     ;branch to set carry if found
+         cmp #$68      ;check for bottom jumpspring metatile
+.else
          cmp #$68      ;check for top jumpspring metatile
          beq JSFnd     ;branch to set carry if found
          cmp #$69      ;check for bottom jumpspring metatile
+.endif
          clc           ;clear carry flag
          bne NoJSFnd   ;branch to use cleared carry if not found
 JSFnd:   sec           ;set carry if found
@@ -10587,8 +11266,23 @@ HandlePipeEntry:
           sta Player_SprAttrib      ;set background priority bit in player's attributes
           lda WarpZoneControl       ;check warp zone control
           beq ExPipeE               ;branch to leave if none found
+.ifdef ANN
+         and #%00000111            ;mask bits
+         asl
+         asl                       ;multiply by four
+         tax                       ;save as offset to warp zone numbers (starts at left pipe)
+         lda Player_X_Position     ;get player's horizontal position
+         cmp #$60      
+         bcc GetWNum               ;if player at left, not near middle, use offset and skip ahead
+         inx                       ;otherwise increment for middle pipe
+         cmp #$a0      
+         bcc GetWNum               ;if player at middle, but not too far right, use offset and skip
+         inx                       ;otherwise increment for last pipe
+.else
           and #%00001111            ;mask out all but lower nybble
           tax                       ;save as offset, then use to load warp zone destination
+.endif
+GetWNum:
           lda WarpZoneNumbers,x
           ldy HardWorldFlag         ;if playing worlds A-D, branch to skip this part
           beq SetWDest
@@ -10648,7 +11342,11 @@ ExIPM: txa                       ;invert contents of X
 ;--------------------------------
 
 SolidMTileUpperExt:
+.ifdef ANN
+      .byte $10, $61, $88, $c4
+.else
       .byte $10, $62, $88, $c5
+.endif
 
 CheckForSolidMTiles:
       jsr GetMTileAttrib        ;find appropriate offset based on metatile's 2 MSB
@@ -10656,7 +11354,11 @@ CheckForSolidMTiles:
       rts
 
 ClimbMTileUpperExt:
+.ifdef ANN
+      .byte $24, $6e, $8a, $c6
+.else
       .byte $21, $6f, $8d, $c7
+.endif
 
 CheckForClimbMTiles:
       jsr GetMTileAttrib        ;find appropriate offset based on metatile's 2 MSB
@@ -10664,9 +11366,15 @@ CheckForClimbMTiles:
       rts
 
 CheckForCoinMTiles:
+.ifdef ANN
+         cmp #$c2              ;check for regular coin
+         beq CoinSd            ;branch if found
+         cmp #$c3              ;check for underwater coin
+.else
          cmp #$c3              ;check for regular coin
          beq CoinSd            ;branch if found
          cmp #$c4              ;check for underwater coin
+.endif
          beq CoinSd            ;branch if found
          clc                   ;otherwise clear carry and leave
          rts
@@ -10734,7 +11442,11 @@ NoEToBGCollision:
 HandleEToBGCollision:
       jsr ChkForNonSolids       ;if something is underneath enemy, find out what
       beq NoEToBGCollision      ;if blank $26, coins, or hidden blocks, jump, enemy falls through
+.ifdef ANN
+      cmp #$23
+.else
       cmp #$20
+.endif
       bne LandEnemyProperly     ;check for blank metatile $20 and branch if not found
       lda Enemy_ID,x
       cmp #$15                  ;if enemy object => $15, branch ahead
@@ -10982,7 +11694,11 @@ DoSide: jmp DoEnemySideCheck  ;check for horizontal blockage, then leave
 HammerBroBGColl:
       jsr ChkUnderEnemy    ;check to see if hammer bro is standing on anything
       beq NoUnderHammerBro      
+.ifdef ANN
+      cmp #$23
+.else
       cmp #$20             ;check for blank metatile $20 and branch if not found
+.endif
       bne UnderHammerBro
 
 KillEnemyAboveBlock:
@@ -11012,6 +11728,19 @@ ChkUnderEnemy:
       jmp BlockBufferChk_Enemy  ;hop to it!
 
 ChkForNonSolids:
+.ifdef ANN
+       cmp #$26       ;blank metatile used for vines?
+       beq NSFnd
+       cmp #$c2       ;regular coin?
+       beq NSFnd
+       cmp #$c3       ;underwater coin?
+       beq NSFnd
+       cmp #$5e       ;
+       beq NSFnd
+       cmp #$5f       ;hidden coin block?
+       beq NSFnd
+       cmp #$60       ;hidden 1-up block?
+.else
        cmp #$23       ;blank metatile used for vines?
        beq NSFnd
        cmp #$c3       ;regular coin?
@@ -11025,6 +11754,7 @@ ChkForNonSolids:
        cmp #$60       ;hidden poison shroom block?
        beq NSFnd
        cmp #$61       ;hidden power-up block?
+.endif
 NSFnd: rts
 
 ;-------------------------------------------------------------------------------------
@@ -11909,7 +12639,13 @@ EnemyGfxTableOffsets:
 
 EnemyAttributeData:
       .byte $01, $02, $03, $02, $22, $01, $03, $03
-      .byte $03, $01, $01, $02, $02, $20, $01, $02
+      .byte $03, $01, $01, $02, $02
+.ifdef ANN
+      .byte $21
+.else
+      .byte $20
+.endif
+      .byte $01, $02
       .byte $01, $01, $02, $ff, $02, $02, $01, $01
       .byte $00, $00, $00
 
@@ -11920,6 +12656,10 @@ JumpspringFrameOffsets:
       .byte $18, $19, $1a, $19, $18
 
 EnemyGfxHandler:
+.ifdef ANN
+       lda #$00
+       sta ANNMushroomRetainerGfxHandler
+.endif
        lda Enemy_Y_Position,x      ;get enemy object vertical position
        sta $02
        lda Enemy_Rel_XPos          ;get enemy object horizontal position
@@ -11935,6 +12675,7 @@ EnemyGfxHandler:
        lda Enemy_ID,x
        cmp #PiranhaPlant           ;is enemy object piranha plant?
        bne CheckForRetainerObj     ;if not, branch
+.ifndef ANN
        ldy #$02                    ;default data makes red piranha plants
        lda HardWorldFlag
        bne RPlnt                   ;use default data if in worlds A-D
@@ -11943,6 +12684,7 @@ EnemyGfxHandler:
        bcs RPlnt                   ;use default data if in worlds 4-8
        dey                         ;otherwise make green piranha plant
 RPlnt: sty $04
+.endif
        ldy PiranhaPlant_Y_Speed,x
        bmi CheckForRetainerObj     ;if piranha plant moving upwards, branch
        ldy EnemyFrameTimer,x
@@ -11979,6 +12721,17 @@ CheckForJumpspring:
        cmp #JumpspringObject        ;check for jumpspring object
        bne CheckForPodoboo
        lda #$02
+.ifdef ANN
+       ldy HardWorldFlag
+       beq RedJS
+       ldy WorldNumber
+       cpy #$01
+       beq @Shift
+       cpy #$02
+       bne RedJS
+@Shift:
+       lsr a
+.else
        ldy WorldNumber              ;if the world number is not 2, 3 or 7
        cpy #$01                     ;then use regular attributes for jumpsprings
        beq GrnJS                    ;which will paint them red
@@ -11987,6 +12740,7 @@ CheckForJumpspring:
        cpy #$06                     ;to get the green superhigh jumpsprings
        bne RedJS
 GrnJS: lsr
+.endif
 RedJS: sta $04
        ldy #$03                     ;set enemy state -2 MSB here for jumpspring object
        ldx JumpspringAnimCtrl       ;get current frame number for jumpspring object
@@ -12174,6 +12928,9 @@ CheckToAnimateEnemy:
       lda WorldNumber          ;are we on world 8?
       cmp #World8
       bcs CheckDefeatedState   ;if so, leave the offset alone (use princess)
+.ifdef ANN
+	  inc ANNMushroomRetainerGfxHandler
+.endif	  
       ldx #$a2                 ;otherwise, set for mushroom retainer object instead
       bne CheckDefeatedState   ;unconditional branch
 
@@ -12222,6 +12979,10 @@ SkipToOffScrChk:
       jmp SprObjectOffscrChk     ;jump if found
 
 CheckForVerticalFlip:
+.ifdef ANN
+      lda ANNMushroomRetainerGfxHandler
+      bne SkipToOffScrChk
+.endif
       lda VerticalFlipFlag       ;check if vertical flip flag is set here
       beq CheckForESymmetry      ;branch if not
       lda Sprite_Attributes,y    ;get attributes of first sprite we dealt with
@@ -12455,7 +13216,11 @@ DBlkLoop:  lda DefaultBlockObjTiles,x    ;get left tile number
            sta Sprite_Tilenumber,y       ;otherwise remove brick tiles with lines
            sta Sprite_Tilenumber+4,y     ;and replace then with lineless brick tiles
 ChkRep:    lda Block_Metatile,x          ;check replacement metatile
+.ifdef ANN
+           cmp #$c4                      ;if not used block metatile, then
+.else
            cmp #$c5                      ;if not used block metatile, then
+.endif
            bne BlkOffscr                 ;branch ahead to use current graphics
            lda #$87                      ;set A for used block tile
            iny                           ;increment Y to write to tile bytes
@@ -13374,7 +14139,9 @@ SetHFAt: ora $04                    ;add other OAM attributes if necessary
          rts
 
 ;-------------------------------------------------------------------------------------
- .export InitializeLeaves
+.ifndef ANN
+	 .export InitializeLeaves
+.endif
  
 AttractModeSubs:
       lda OperMode_Task
@@ -13382,6 +14149,9 @@ AttractModeSubs:
 
       .word AttractModeDiskRoutines
       .word InitializeGame
+.ifdef ANN
+      .word VMDelay
+.endif
       .word ScreenRoutines
       .word PrimaryGameSetup
       .word GameMenuRoutine
@@ -13399,7 +14169,9 @@ LoadHardWorlds:
          beq NoLoadHW
          lda #$03
          sta FileListNumber        ;set filelist number to load SM2DATA4
+.ifndef ANN
          jsr InitializeLeaves      ;init leaf positions for wind
+.endif
 NoLoadHW:
          jsr RunLoadAreaPointer    ;update area pointer to get world 1 or A
 NoCHWP:  inc Hidden1UpFlag
@@ -13429,7 +14201,7 @@ LoadWorlds1Thru4:
 LW14Files: lda #$00              ;set filelist number to reload SM2MAIN, SM2CHAR1 and SM2SAVE
            sta FileListNumber
            lda #Spr_MainBank+1
-           jsr SwitchSPR_CHR1   
+           jsr SwitchSPR_CHR1 
 InitWorldPos:
            lda #$01              ;set flag to check player's world info
            sta NotColdFlag       ;before erasing it
@@ -13454,7 +14226,9 @@ LoadWorlds5Thru8:
       bcs ResetDiskIOTask   ;as there's no need to load anything
       lda #$01
       sta FileListNumber    ;otherwise set filelist number to load SM2DATA2
+.ifndef ANN
       jsr InitializeLeaves  ;init leaf positions for wind
+.endif
 
 ResetDiskIOTask:
       lda #$00              ;reset disk-related task number for next time
@@ -13481,8 +14255,15 @@ VictoryModeDiskRoutines:
       .word LoadEnding
 
 LoadEnding:
-        lda #Spr_EndingBank+1
+.ifdef ANN
+		lda #Spr_EndingBank
+		jsr SwitchSPR_CHR1
+		lda #Spr_EndingBank+1
+		jsr SwitchSPR_CHR2
+.else
+        lda #Spr_EndingBank
         jsr SwitchSPR_CHR1       ;load princess graphics
+.endif
         jsr InitializeNameTables
         jsr ResetDiskIOTask      ;end disk subroutines
         sta ScreenRoutineTask    ;init screen routine task
@@ -13539,10 +14320,11 @@ ChgSelLoop: lda GameOverCursorData,y     ;set up cursor sprite tile, attribute
 ContinueOrRetry:
   lda ContinueMenuSelect       ;if player selected "continue"
   beq Continue                 ;then branch to continue
+.ifndef ANN
   lda #$00
   sta CompletedWorlds          ;otherwise init completed worlds flags
+.endif
   jmp TerminateGame            ;and end the game
-
 Continue:
         ldy #$02
         sty NumberofLives           ;give three lives
@@ -13559,7 +14341,11 @@ ISCont: sta ScoreAndCoinDisplay,y   ;reset score
 ;-------------------------------------------------------------------------------------
 
 AreaDataOfsLoopback:
+.ifdef ANN
+  .byte $12, $36, $0E, $0E, $0E, $32, $32, $32, $0C, $54 
+.else
   .byte $0c, $0c, $42, $42, $10, $10, $30, $30, $06, $0c, $54, $06
+.endif
 
 ;-------------------------------------------------------------------------------------
 
@@ -13568,7 +14354,9 @@ GameMenuRoutine:
               and #Start_Button
               beq ChkSelect               ;if not, branch to check other buttons
               lda #$00
+.ifndef ANN
               sta CompletedWorlds
+.endif
               sta DiskIOTask
               sta HardWorldFlag
               lda GamesBeatenCount        ;check to see if player has beaten
@@ -13651,6 +14439,17 @@ CursorDataRead:
               sta VRAM_Buffer1+5
 ExitCursor:   rts
 
+.ifdef ANN
+DemoActionData:
+  .byte $01, $00, $81, $01, $81, $42, $C2, $01
+  .byte $81, $00, $C1, $41, $C1, $C2, $41, $C1
+  .byte $42, $C2, $00
+
+DemoTimingData:
+  .byte $90, $70, $40, $18, $20, $10, $2C, $10
+  .byte $1C, $70, $78, $08, $40, $20, $20, $40
+  .byte $40, $20, $B0 ,$00
+.else
 DemoActionData:
   .byte $01, $81, $01, $81, $01, $81, $02, $01
   .byte $81, $00, $81, $00, $80, $01, $81, $01
@@ -13660,6 +14459,7 @@ DemoTimingData:
   .byte $b0, $10, $10, $10, $28, $10, $28, $06
   .byte $10, $10, $0c, $80, $10, $28, $08, $90
   .byte $ff, $00
+.endif
 
 DemoEngine:
           ldx DemoAction         ;load current demo action
@@ -13695,22 +14495,50 @@ TScrClear:   sta VRAM_Buffer1-1,x
 ;$01 - used to store number of title screen stars drawn per line
 
 DrawTitleScreenStars:
+		.ifdef ANN
+            lda #$e6                 ;set the VRAM address for the first line of stars
+		.else
             lda #$d0                 ;set the VRAM address for the first line of stars
+		.endif
             sta $00
             lda GamesBeatenCount     ;have we beaten the game at least once?
             beq NoStars              ;if not, we don't need to be here
-            cmp #$0d                 ;do we have more than 12 stars?
+		.ifdef ANN
+            cmp #$0b                 ;do we have more than 10 stars?
+		.else
+			cmp #$0d                 ;do we have more than 12 stars?
+		.endif
             bcc DrawLine             ;if not, draw the first line as-is
-            lda #$0c                 ;otherwise, we need 12 stars for the first line
+		.ifdef ANN
+            lda #$0a                 ;otherwise, we need 12 stars for the first line
+		.else
+			lda #$0c                 ;do we have more than 12 stars?
+		.endif
             jsr DrawLine
-            lda #$f0                 ;now set the VRAM address for the second line
+		.ifdef ANN
+            lda #$c6                 ;set the VRAM address for the first line of stars
+		.else
+            lda #$f0                 ;set the VRAM address for the first line of stars
+		.endif
             sta $00
             lda GamesBeatenCount     ;get the correct number of stars to draw for the second line
             sec
-            sbc #$0c
-            cmp #$0d                 ;do we have somehow have more than 24 stars total?
+		.ifdef ANN
+            sbc #$0a                 ;otherwise, we need 12 stars for the first line
+		.else
+			sbc #$0c                 ;do we have more than 12 stars?
+		.endif
+		.ifdef ANN
+            cmp #$0b                 ;do we have more than 10 stars?
+		.else
+			cmp #$0d                 ;do we have more than 12 stars?
+		.endif
             bcc DrawLine             ;if not, draw the second line normally
-            lda #$0c                 ;if we do, force the second line to only have 12 stars
+		.ifdef ANN
+            lda #$0a                 ;otherwise, we need 12 stars for the first line
+		.else
+			lda #$0c                 ;do we have more than 12 stars?
+		.endif
 DrawLine:   ora #%01000000           ;add bit to indicate repeated tile
             sta $01                  ;and store in temp variable
             ldx VRAM_Buffer1_Offset
@@ -13739,7 +14567,9 @@ IncModeTask_B: jmp IncModeTask
 
 InitializeGame:
             lda #$00
+.ifndef ANN
             sta CompletedWorlds      ;clean slate player's progress (except for games beaten)
+.endif
             sta HardWorldFlag
             sta SelectedPlayer
             ldy #$6f                 ;clear all memory as in initialization procedure,
@@ -13766,6 +14596,41 @@ PrimaryGameSetup:
 ;-------------------------------------------------------------------------------------
 
 TitleScreenGfxData:
+.ifdef ANN
+      .byte $20,$85,$01,$44
+      .byte $20,$86,$55,$48
+      .byte $20,$9B,$01,$49
+      .byte $20,$A5,$C9,$46
+      .byte $20,$BB,$C9,$4A
+      .byte $20,$A6,$15,$EC,$ED,$EE,$EF,$F3,$F4,$F5,$F6,$F7,$F8,$D0,$D1,$D8,$D8,$DE,$D1,$D0,$DA,$DE,$D1,$26
+      .byte $20,$C6,$15,$26,$26,$26,$26,$26,$26,$26,$26,$26,$26,$D2,$D3,$DB,$DB,$DB,$D9,$DB,$DC,$DB,$DF,$26
+      .byte $20,$E6,$15,$26,$26,$26,$26,$26,$26,$26,$26,$26,$26,$D4,$D5,$D4,$D9,$DB,$E2,$D4,$DA,$DB,$E0,$26
+      .byte $21,$06,$55,$26
+      .byte $21,$10,$0A,$D6,$D7,$D6,$D7,$E1,$26,$D6,$DD,$E1,$E1
+      .byte $21,$26,$15,$D0,$E8,$D1,$D0,$D1,$DE,$D1,$D8,$D0,$D1,$26,$DE,$D1,$DE,$D1,$D0,$D1,$D0,$D1,$26,$26
+      .byte $21,$46,$15,$DB,$42,$42,$DB,$E3,$DB,$E3,$DB,$DB,$E3,$26,$DB,$E3,$DB,$E3,$DB,$E3,$DB,$E3,$26,$26
+      .byte $21,$66,$46,$DB
+      .byte $21,$6C,$0F,$DF,$DB,$DB,$DB,$26,$DB,$DF,$DB,$DF,$DB,$DB,$D2,$E5,$26,$26      
+      .byte $21,$86,$15,$DB,$DB,$DB,$DE,$43,$DB,$DB,$DB,$DB,$DB,$26,$DB,$E3,$DB,$E3,$DB,$DB,$DB,$E3,$26,$26
+      .byte $21,$A6,$15,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$DB,$D4,$D9,$26,$DB,$D9,$DB,$DB,$D4,$D9,$D4,$D9,$DA,$26
+      .byte $21,$C5,$17,$5F,$95,$95,$95,$95,$95,$95,$95,$95,$97,$98,$78,$95,$96,$95,$95,$97,$98,$97,$98,$95,$78,$7A
+      .byte $21,$EE,$0E,$CF,$01,$09,$08,$06,$24,$17,$12,$17,$1D,$0E,$17,$0D,$18
+      .byte $22,$4D,$0A,$16,$0A,$1B,$12,$18,$24,$10,$0A,$16,$0E
+      .byte $22,$8D,$0A,$15,$1E,$12,$10,$12,$24,$10,$0A,$16,$0E
+      .byte $22,$ED,$04,$1D,$18,$19,$28
+      .byte $22,$F7,$01,$00
+      .byte $23,$C9,$01,$D5
+      .byte $23,$CA,$46,$F5
+      .byte $23,$D1,$47,$55
+      .byte $23,$D9,$47,$55
+      .byte $23,$CC,$43,$55
+      .byte $23,$D6,$01,$DD
+      .byte $23,$DE,$01,$5D
+      .byte $23,$E2,$04,$55,$AA,$AA,$AA
+      .byte $23,$EA,$05,$95,$AA,$AA,$AA
+      .byte $2A
+      .byte $00
+.else
        .byte $20, $84, $01, $44
        .byte $20, $85, $57, $48
        .byte $20, $9c, $01, $49
@@ -13808,6 +14673,7 @@ TitleScreenGfxData:
        .byte $23, $e2, $04, $55, $aa, $aa, $aa
        .byte $23, $ea, $04, $95, $aa, $aa, $2a
        .byte $00, $ff, $ff
+.endif
 
 ;-------------------------------------------------------------------------------------------------
 ;$06 - used to store vertical length of pipe
@@ -13901,6 +14767,7 @@ ExMoveUDPP:
 
 ;-------------------------------------------------------------------------------------
 
+.ifndef ANN
 BlowPlayerAround:
         lda WindFlag            ;if wind is turned off, just exit
         beq ExBlow
@@ -14004,11 +14871,13 @@ WLp:  lda LeavesXPos,y      ;initialize leaf positions
       bpl WLp               ;branch if not done initalizing leaves
       rts                   ;leave
 
+.endif
 ;-------------------------------------------------------------------------------------
 
 GoToDemoReset:
        jmp DemoReset
 
+.ifndef ANN
 PrintWorld9Msgs:
        lda WorldNumber           ;check if we are in world 9
        cmp #World9
@@ -14033,6 +14902,7 @@ W9GameOver:
     lda #$1e                  ;set VRAM pointer to print world 9 goodbye message
     sta VRAM_Buffer_AddrCtrl
     jmp NextOperTask          ;move on to next task
+.endif
 
 ScreenSubsForFinalRoom:
     lda ScreenRoutineTask
@@ -14046,6 +14916,9 @@ ScreenSubsForFinalRoom:
     .word DrawFinalRoom
     .word GetAreaPalette
     .word GetBackgroundColor
+.ifdef ANN
+    .word SetEndingPalette
+.endif
     .word RevealPrincess
 
 DrawFinalRoom:
@@ -14056,6 +14929,14 @@ DrawFinalRoom:
 NextScreenTask:
     inc ScreenRoutineTask
     rts
+.ifdef ANN
+
+SetEndingPalette:
+    lda #$1e
+    sta VRAM_Buffer_AddrCtrl
+    inc ScreenRoutineTask
+    rts
+.endif
 
 RevealPrincess:
     lda #$a2                   ;print game timer
@@ -14178,63 +15059,57 @@ NextBlue:  lda BlueTints,y        ;set background color based on color offset
 ExFade:    rts
 
 EraseLivesLines:
-		ldx #$08                  ;erase bottom two lines
-ELL: 	lda TwoBlankRows,x
-		sta VRAM_Buffer1,x
-		dex
-		bpl ELL
-		inc OperMode_Task
-		jsr EraseEndingCounters   ;init ending counters
-		lda #$60
-		sta MushroomRetDelay      ;wait before flashing each mushroom retainer in next sub
-		rts
+     ldx #$08                  ;erase bottom two lines
+ELL: lda TwoBlankRows,x
+     sta VRAM_Buffer1,x
+     dex
+     bpl ELL
+     inc OperMode_Task
+     jsr EraseEndingCounters   ;init ending counters
+     lda #$60
+     sta MushroomRetDelay      ;wait before flashing each mushroom retainer in next sub
+     rts
     
 RunMushroomRetainers:
-		jsr MushroomRetainersForW8  ;draw and flash the seven mushroom retainers
-		lda EventMusicBuffer        ;if still playing victory music, branch to leave
-		bne ExRMR
-		lda HardWorldFlag           ;if on world D, branch elsewhere
-		bne BackToNormal
-		inc OperMode_Task           ;otherwise just move onto the last task
-ExRMR: 	rts
+       jsr MushroomRetainersForW8  ;draw and flash the seven mushroom retainers
+       lda EventMusicBuffer        ;if still playing victory music, branch to leave
+       bne ExRMR
+       lda HardWorldFlag           ;if on world D, branch elsewhere
+       bne BackToNormal
+       inc OperMode_Task           ;otherwise just move onto the last task
+ExRMR: rts
 
 EndingDiskRoutines:
-		lda DiskIOTask
-		jsr JumpEngine
+    lda DiskIOTask
+    jsr JumpEngine
 
-		.word DiskScreen
-		.word UpdateGamesBeaten
+    .word DiskScreen
+    .word UpdateGamesBeaten
 
 UpdateGamesBeaten:
-		lda GamesBeatenCount     ;get the new count of games beaten
-		clc                      ;note that this code is skipped if on world D
-		adc #$01                 ;add one to it, to a maximum of 24/$18
-		cmp #25
-		bcc SetS2S
-		lda #24                  ;sorry, only 24 stars allowed
+    lda GamesBeatenCount     ;get the new count of games beaten
+    clc                      ;note that this code is skipped if on world D
+    adc #$01                 ;add one to it, to a maximum of 24/$18
+.ifdef ANN
+        cmp #21
+.else
+        cmp #25
+.endif
+        bcc SetS2S
+.ifdef ANN
+        lda #20                  ;sorry, only 20 stars allowed
+.else
+        lda #24                  ;sorry, only 24 stars allowed
+.endif
 SetS2S:
 		sta GamesBeatenCount
+.ifdef ANN
+        lda #$01
+        sta PrimaryHardMode
+.endif
 
 BackToNormal:
-		lda #$00
-		sta DiskIOTask           ;erase task numbers
-		sta OperMode_Task
-		lda HardWorldFlag        ;if in world D, branch to end the game
-		bne EndTheGame
-		lda CompletedWorlds      ;if completed all worlds without skipping over any
-		cmp #$ff                 ;then branch elsewhere (note warping backwards may
-		beq GoToWorld9           ;allow player to complete skipped worlds)
-EndTheGame:
-		lda #$00
-		sta CompletedWorlds      ;init completed worlds flag, go back to title screen mode
-		sta OperMode
-		jmp AttractModeSubs      ;jump to title screen mode routines
-GoToWorld9:
-		lda #$00
-		sta CompletedWorlds      ;init completed worlds flag
-		sta NumberofLives        ;give the player one life
-		sta FantasyW9MsgFlag
-		jmp NextWorld            ;run world 9
+	jmp BANK_PractiseReset
 
 FlashMRSpriteDataOfs:
     .byte $50, $b0, $e0, $68, $98, $c8
@@ -14247,6 +15122,13 @@ MRetainerYPos:
 
 MRetainerXPos:
     .byte $b8, $38, $48, $60, $80, $a0, $b8, $c8
+
+.ifdef ANN
+ANNMRetainerTiles:
+    .byte $7A,$80,$86,$8C,$92,$98,$9E
+ANNMRetainerAttr:
+    .byte $02,$03,$01,$02,$03,$01,$03
+.endif
 
 MushroomRetainersForW8:
     lda MushroomRetDelay        ;wait a bit unless waiting is already done
@@ -14279,8 +15161,10 @@ FlashMRetainers:
     sta CurrentFlashMRet       ;otherwise reset to 4
 DrawMRetainers:
     inc EndControlCntr         ;be sure to count frames
+.ifndef ANN
     lda WorldNumber
     pha                        ;save world number and initial retainer offset
+.endif
     lda MRetainerOffset
     pha
     tax                        ;use second counter as offset to one of the spr data offset lists
@@ -14295,10 +15179,50 @@ DrawMRetLoop:
     beq NextMRet               ;then branch to skip, do not draw that mushroom retainer
 SetupMRet:
     ldy MRSpriteDataOfs,x      ;get sprite data offset of the current mushroom retainer
+.ifndef ANN
     sty Enemy_SprDataOffset
     lda #$35
     sta $16                    ;set mushroom retainer object ID
+.endif
     lda MRetainerYPos,x
+.ifdef ANN
+    sta Sprite_Y_Position+0,y
+    sta Sprite_Y_Position+12,y
+    clc
+    adc #$8
+    sta Sprite_Y_Position+4,y
+    sta Sprite_Y_Position+16,y
+    clc
+    adc #$8
+    sta Sprite_Y_Position+8,y
+    sta Sprite_Y_Position+20,y
+    lda MRetainerXPos,x
+    sta Sprite_X_Position+0,y
+    sta Sprite_X_Position+4,y
+    sta Sprite_X_Position+8,y
+    clc
+    adc #8
+    sta Sprite_X_Position+12,y
+    sta Sprite_X_Position+16,y
+    sta Sprite_X_Position+20,y
+    lda ANNMRetainerTiles-1,x
+    sta $00
+    lda ANNMRetainerAttr-1,x
+    sta $01
+    ldx #$00
+:   lda $00
+    sta Sprite_Tilenumber,y
+    lda $01
+    sta Sprite_Attributes,y
+    iny
+    iny
+    iny
+    iny
+    inc $00
+    inx
+    cpx #$06
+    bne :-
+.else
     sta Enemy_Y_Position       ;use enemy object 0 for mushroom retainer temporarily
     lda MRetainerXPos,x
     sta Enemy_Rel_XPos
@@ -14306,14 +15230,17 @@ SetupMRet:
     stx WorldNumber            ;to prevent graphics handler from drawing princess instead
     stx ObjectOffset
     jsr EnemyGfxHandler        ;now draw the mushroom retainer
+.endif
 NextMRet:
     dec MRetainerOffset        ;move to next mushroom retainer using offset
     ldx MRetainerOffset
     bne DrawMRetLoop           ;if not drawn all retainers yet, loop to do so
     pla
     sta MRetainerOffset        ;reset initial offset
+.ifndef ANN
     pla
     sta WorldNumber            ;return world number to what it was to draw princess
+.endif
     lda #$30
     sta Enemy_SprDataOffset
     lda #$b8                   ;return original settings princess uses (note X position
@@ -14398,6 +15325,14 @@ ForEachPlayerLeftMsg:
     .byte $0e, $1b, $24, $15, $0e, $0f, $1d, $af
     .byte $00
 
+.ifdef ANN
+ANNEndingPalette:
+.byte $3F,$14,$0C
+.byte $0F,$12,$30,$36,$0F,$36
+.byte $30,$16,$0F,$36,$30,$1A
+.byte $00
+.endif
+
 PrincessPeachsRoom:
     .byte $20, $80, $60, $5e
     .byte $20, $a0, $60, $5d
@@ -14409,6 +15344,7 @@ PrincessPeachsRoom:
     .byte $23, $f0, $50, $55
     .byte $00
 
+.ifndef ANN       
 FantasyWorld9Msg:
     .byte $22, $24, $18
     .byte $20, $0e, $24, $19, $1b, $0e, $1c, $0e, $17, $1d, $24, $0f, $0a
@@ -14438,17 +15374,22 @@ SuperPlayerMsg:
     .byte $16, $0a, $1b, $12, $18, $24, $0a, $17, $0d, $24, $1c, $1d, $0a
     .byte $0f, $0f, $af
     .byte $00
+.endif
 
 ;-------------------------------------------------------------------------------------
 
 .res $FE00 - *, $FF
 
-SM2Header:
+SaveHeader:
+.ifdef ANN
+        .byte "NSMSAVE"
+.else
         .byte "SM2SAVE"
+.endif
 
 CheckSaveData:
         ldx #$00                ;init counter
-SChkLp: lda SM2Header,x         ;check all seven bytes of the save data header
+SChkLp: lda SaveHeader,x        ;check all seven bytes of the save data header
         cmp SaveDataHeader,x    ;and see if it is identical to what it should be
         bne InitializeSaveData  ;if any byte does not match, wipe existing save data
         inx
@@ -14458,13 +15399,13 @@ SChkLp: lda SM2Header,x         ;check all seven bytes of the save data header
 InitializeSaveData:
         ldx #$00                ;init counter
         stx GamesBeatenCount    ;wipe number of games beaten
-SaveLp: lda SM2Header,x         ;write save data header
+SaveLp: lda SaveHeader,x        ;write save data header
         sta SaveDataHeader,x
         inx
         cpx #$07                ;have we gone through all seven bytes?
         bcc SaveLp              ;if not, loop back
         rts                     ;otherwise we have reset save data, leave
-		
+
 IRQHandler:
 		sei
 		php                      ;save regs
@@ -14529,6 +15470,7 @@ VBlank:
 		jsr CheckSaveData           ;check validity of save data
 		jmp Start                   ;now start the game!
 
+
 InitializeBG_CHR:
 		lda #BG_MainBank
 		jsr SwitchBG_CHR0
@@ -14584,71 +15526,75 @@ SwitchSPR_CHR0:
 		pla
 		sta MMC3_BankData
 		rts
-
+		
 LoadGameBank:
-		lda #GameBank        ;load main bank
-		jsr SwitchPRGBank0
-		lda #GameBank+1        ;load main bank		
+	lda #GameBank        ;load main bank
+	jsr SwitchPRGBank0
+	lda #GameBank+1        ;load main bank		
 SwitchPRGBank1:
-		pha
-		lda #%00000111
-		sta MMC3_BankSelect
-		pla
-		sta MMC3_BankData
-		rts
+	pha
+	lda #%00000111
+	sta MMC3_BankSelect
+	pla
+	sta MMC3_BankData
+	rts
 SwitchPRGBank0:
-		pha
-		lda #%00000110
-		sta MMC3_BankSelect
-		pla
-		sta MMC3_BankData
-		rts
+	pha
+	lda #%00000110
+	sta MMC3_BankSelect
+	pla
+	sta MMC3_BankData
+	rts
 
 RunSoundEngine:
-		lda #SoundBank        ;switch bank
-		jsr SwitchPRGBank0
-		lda #SoundBank+1        ;switch bank again :DDDDDDDD
-		jsr SwitchPRGBank1
-		jsr SoundEngine       ;run relevant routine
-		jmp LoadGameBank      ;and return to main bank
+	lda #SoundBank        ;switch bank
+	jsr SwitchPRGBank0
+	lda #SoundBank+1        ;switch bank again :DDDDDDDD
+	jsr SwitchPRGBank1
+	jsr SoundEngine       ;run relevant routine
+	jmp LoadGameBank      ;and return to main bank
 
 RunLoadAreaPointer:
-		lda #LevelsBank       ;switch bank
-		jsr SwitchPRGBank0
-		lda #LevelsBank+1       ;switch bank again :DDDDDDDD
-		jsr SwitchPRGBank1
-		jsr LoadAreaPointer   ;run relevant routine
-		jmp LoadGameBank      ;and return to main bank
+	lda #LevelsBank       ;switch bank
+	jsr SwitchPRGBank0
+	lda #LevelsBank+1       ;switch bank again :DDDDDDDD
+	jsr SwitchPRGBank1
+	jsr LoadAreaPointer   ;run relevant routine
+	jmp LoadGameBank      ;and return to main bank
 
 RunGetAreaDataAddrs:
-		lda #LevelsBank       ;switch bank
-		jsr SwitchPRGBank0
-		lda #LevelsBank+1       ;switch bank again :DDDDDDDD
-		jsr SwitchPRGBank1
-		jsr GetAreaDataAddrs  ;run relevant routine
-		jmp LoadGameBank      ;and return to main bank
+	lda #LevelsBank       ;switch bank
+	jsr SwitchPRGBank0
+	lda #LevelsBank+1       ;switch bank again :DDDDDDDD
+	jsr SwitchPRGBank1
+	jsr GetAreaDataAddrs  ;run relevant routine
+	jmp LoadGameBank      ;and return to main bank
 
 RunGetAreaPointer:
-		lda #LevelsBank       ;switch bank
-		jsr SwitchPRGBank0
-		lda #LevelsBank+1       ;switch bank again :DDDDDDDD
-		jsr SwitchPRGBank1
-		jsr GetAreaPointer    ;run relevant routine
-		jmp LoadGameBank      ;and return to main bank
+	lda #LevelsBank       ;switch bank
+	jsr SwitchPRGBank0
+	lda #LevelsBank+1       ;switch bank again :DDDDDDDD
+	jsr SwitchPRGBank1
+	jsr GetAreaPointer    ;run relevant routine
+	jmp LoadGameBank      ;and return to main bank
 
 ;-------------------------------------------------------------------------------------
 ;INTERRUPT VECTORS
 
-.res $FFD0 - *, $FF
-
-;"VECTORS"
-;        .word NMIHandler
-;        .word Reset
-;        .word IRQHandler 
+.res $ffd0 - *, $ff
 
 ;"CHR"
+
+.ifndef ANN
 .segment "SM2CHAR1"
         .incbin "sm2char1_bg.chr"
         .incbin "sm2char1_spr.chr"
 .segment "SM2CHAR2"
         .incbin "ending_spr.chr"
+.else
+.segment "SM2CHAR1"
+        .incbin "nsmchar1_bg.chr"
+        .incbin "nsmchar1_spr.chr"
+.segment "SM2CHAR2"
+        .incbin "ending_spr_ann.chr"
+.endif

@@ -58,7 +58,9 @@ jsr PractiseEnterStage
 jmp BANK_GAME_RTS
 rts
 
-.import InitializeLeaves
+.ifndef ANN
+	.import InitializeLeaves
+.endif
 ; ===========================================================================
 ;  Attempt to find the level selected on the menu screen
 ; ---------------------------------------------------------------------------
@@ -69,7 +71,9 @@ BANK_AdvanceToLevel:
     sbc #$09                            ; otherwise subtract 9 for internal number
     sta WorldNumber                     ; store the result in the world number
     inc HardWorldFlag                   ; and set letter worlds flag
+.ifndef ANN
     jsr InitializeLeaves                ; init leaves for letter worlds
+.endif
     lda #$03                            ; set correct filelist number
     sta FileListNumber                  ;
     bne @InitAreaNumber                 ; unconditionally branch ahead

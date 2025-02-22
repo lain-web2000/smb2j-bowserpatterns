@@ -59,7 +59,11 @@ RNGQuickResume:
     jsr StepITCByY
 @Done:
     ; make sure we get correct cointoss frames
+.ifdef ANN
+	lda #$18
+.else
     lda #$17
+.endif
     sta FrameCounter
     rts
 

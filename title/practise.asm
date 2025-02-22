@@ -214,8 +214,6 @@ PractiseWriteBottomStatusLine:
 PractiseEnterStage:
     lda #3
     sta NumberofLives
-    lda #152
-    sta $203
     lda EnteringFromMenu
     beq @Done
     clc

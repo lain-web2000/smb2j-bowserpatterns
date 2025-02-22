@@ -11,10 +11,10 @@ Settable2:   .byte $00
 .popseg
 
 MenuTitles:
-.byte "P-UP"
-.byte "HERO"
-.byte "WRLD"
-.byte "RNG "
+.byte "P-UP    "
+.byte "HERO    "
+.byte "WORLD   "
+.byte "RNG     "
 
 .define MenuTitleLocations \
     $20CA + ($40 * 0), \
@@ -45,32 +45,35 @@ DrawMenuValueJE:
     .word DrawValueFramerule 	 ; frame
 
 DrawMenuTitle:
-    clc
-    lda VRAM_Buffer1_Offset
-    tax
-    adc #3 + 4
-    sta VRAM_Buffer1_Offset
-    lda MenuTitleLocationsHi, y
-    sta VRAM_Buffer1+0, x
-    lda MenuTitleLocationsLo, y
-    sta VRAM_Buffer1+1, x
-    lda #4
-    sta VRAM_Buffer1+2, x
-    tya
-    rol a
-    rol a
-    tay
-    lda MenuTitles,y
-    sta VRAM_Buffer1+3, x
-    lda MenuTitles+1,y
-    sta VRAM_Buffer1+4, x
-    lda MenuTitles+2,y
-    sta VRAM_Buffer1+5, x
-    lda MenuTitles+3,y
-    sta VRAM_Buffer1+6, x
-    lda #0
-    sta VRAM_Buffer1+7, x
-    rts
+    clc                                      ;
+    lda VRAM_Buffer1_Offset                  ; get current vram offset position
+    tax                                      ;
+    adc #3+5                                 ; advance it based on how many bytes we will write
+    sta VRAM_Buffer1_Offset                  ; and save it back
+    lda MenuTitleLocationsHi,y               ; set ppu location of the current item's title
+    sta VRAM_Buffer1+0,x                     ;
+    lda MenuTitleLocationsLo,y               ;
+    sta VRAM_Buffer1+1,x                     ;
+    lda #5                                   ; store length of the title
+    sta VRAM_Buffer1+2,x                     ;
+    tya                                      ; copy the menu item index to A
+    rol a                                    ; and multiply it by 8, the offsets of the title strings
+    rol a                                    ;
+    rol a                                    ;
+    tay                                      ; and copy that back to Y
+    lda MenuTitles+0,y                       ; then write the title screen to the buffer
+    sta VRAM_Buffer1+3,x                     ;
+    lda MenuTitles+1,y                       ;
+    sta VRAM_Buffer1+4,x                     ;
+    lda MenuTitles+2,y                       ;
+    sta VRAM_Buffer1+5,x                     ;
+    lda MenuTitles+3,y                       ;
+    sta VRAM_Buffer1+6,x                     ;
+    lda MenuTitles+4,y                       ;
+    sta VRAM_Buffer1+7,x                     ;
+    lda #0                                   ; and end the buffer with null
+    sta VRAM_Buffer1+8,x                     ;
+    rts                                      ;
 
 
 MenuReset:
